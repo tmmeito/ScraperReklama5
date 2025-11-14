@@ -9,6 +9,10 @@ import json
 import warnings
 from datetime import datetime, timedelta
 from collections import defaultdict
+from urllib import request as urllib_request
+from urllib import error as urllib_error
+
+from bs4 import BeautifulSoup
 
 try:
     from urllib3.exceptions import NotOpenSSLWarning
@@ -24,6 +28,28 @@ from selenium.webdriver.support import expected_conditions as EC
 BASE_URL_TEMPLATE = "https://www.reklama5.mk/Search?city=&cat=24&q={search_term}&page={page_num}"
 OUTPUT_CSV        = "reklama5_autos_raw.csv"
 OUTPUT_AGG        = "reklama5_autos_agg.json"
+
+CSV_FIELDNAMES = [
+    "id", "link", "make", "model", "year", "price", "km", "kw", "ps",
+    "fuel", "gearbox", "body", "color", "registration", "reg_until",
+    "emission_class", "date", "city", "promoted"
+]
+
+DETAIL_FIELD_MAP = {
+    "марка": "make",
+    "модел": "model",
+    "година": "year",
+    "гориво": "fuel",
+    "километри": "km",
+    "менувач": "gearbox",
+    "каросерија": "body",
+    "боја": "color",
+    "регистрација": "registration",
+    "регистрирана до": "reg_until",
+    "сила на моторот": "power_text",
+    "класа на емисија": "emission_class",
+    "kласа на емисија": "emission_class"
+}
 
 MK_MONTHS = {
     "јан":1, "фев":2, "мар":3, "апр":4,
@@ -54,7 +80,6 @@ def fetch_page(driver, search_term, page_num):
     return driver.page_source
 
 def parse_listing(html):
-    from bs4 import BeautifulSoup
     soup     = BeautifulSoup(html, "html.parser")
     results  = []
     listings = soup.select("div.row.ad-top-div")
@@ -65,7 +90,12 @@ def parse_listing(html):
         href          = link_elem.get("href", "")
         m_id          = re.search(r"ad=(\d+)", href)
         ad_id         = m_id.group(1) if m_id else None
-        full_link     = f"https://m.reklama5.mk/AdDetails?ad={ad_id}" if ad_id else None
+        if ad_id:
+            full_link = f"https://www.reklama5.mk/AdDetails?ad={ad_id}"
+        elif href.startswith("http"):
+            full_link = href
+        else:
+            full_link = f"https://www.reklama5.mk{href}" if href else None
 
         title_elem    = link_elem
         price_elem    = listing.select_one("span.search-ad-price")
@@ -128,6 +158,13 @@ def parse_listing(html):
             "km":       km,
             "kw":       kw,
             "ps":       ps,
+            "fuel":     None,
+            "gearbox":  None,
+            "body":     None,
+            "color":    None,
+            "registration": None,
+            "reg_until":    None,
+            "emission_class": None,
             "date":     date_text,
             "city":     city_text,
             "promoted": is_promoted
@@ -181,6 +218,95 @@ def parse_spec_line(text):
     kw   = extract_first_int(normalized, r"([\d\.\,\s]+)\s*(?:kW|кW|кв)")
     ps   = extract_first_int(normalized, r"\((\d+)\s*(?:Hp|HP|кс)\)")
     return year, km, kw, ps
+
+
+def enrich_listings_with_details(listings, enabled, delay_range=None):
+    if not enabled:
+        return
+    for idx, listing in enumerate(listings, start=1):
+        link = listing.get("link")
+        if not link:
+            continue
+        details = fetch_detail_attributes(link)
+        if not details:
+            continue
+        for key, value in details.items():
+            if value in (None, ""):
+                continue
+            listing[key] = value
+        print(f"INFO: Detaildaten für Anzeige {listing.get('id')} geladen ({idx}/{len(listings)}).")
+        if delay_range:
+            wait_time = random.uniform(*delay_range)
+            print(f"INFO: Warte {wait_time:.2f} Sekunden vor nächster Detailseite …")
+            time.sleep(wait_time)
+
+
+def fetch_detail_attributes(url):
+    if not url:
+        return {}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; reklama5-scraper/1.0)"}
+    req = urllib_request.Request(url, headers=headers)
+    try:
+        with urllib_request.urlopen(req, timeout=15) as response:
+            html = response.read()
+    except urllib_error.URLError as exc:
+        print(f"WARNING: Detailseite {url} konnte nicht geladen werden: {exc}")
+        return {}
+    soup = BeautifulSoup(html, "html.parser")
+    raw = {}
+    for label_div in soup.select("div.row.mt-3 div.col-5"):
+        label_text = label_div.get_text(strip=True)
+        if not label_text:
+            continue
+        label_clean = label_text.strip().rstrip(":").lower()
+        key = DETAIL_FIELD_MAP.get(label_clean)
+        if not key:
+            continue
+        value_div = label_div.find_next_sibling("div", class_="col-7")
+        if not value_div:
+            continue
+        value_text = value_div.get_text(strip=True)
+        raw[key] = value_text
+    return normalize_detail_values(raw)
+
+
+def normalize_detail_values(raw):
+    result = {}
+    for text_key in ("make", "model", "fuel", "gearbox", "body", "color",
+                     "registration", "reg_until", "emission_class"):
+        if text_key in raw:
+            result[text_key] = raw[text_key]
+    if "year" in raw:
+        result["year"] = parse_int_value(raw["year"])
+    if "km" in raw:
+        result["km"] = parse_int_value(raw["km"])
+    power_text = raw.get("power_text")
+    if power_text:
+        kw_value, ps_value = parse_power_text(power_text)
+        if kw_value is not None:
+            result["kw"] = kw_value
+        if ps_value is not None:
+            result["ps"] = ps_value
+    return result
+
+
+def parse_int_value(text):
+    digits = re.sub(r"[^0-9]", "", text)
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
+def parse_power_text(text):
+    lowered = text.lower()
+    kw_match = re.search(r"(\d+)\s*(?:kw|кw|кв)", lowered)
+    ps_match = re.search(r"(\d+)\s*(?:ks|кс|hp)", lowered)
+    kw_value = int(kw_match.group(1)) if kw_match else None
+    ps_value = int(ps_match.group(1)) if ps_match else None
+    return kw_value, ps_value
 
 def extract_first_int(text, pattern):
     m = re.search(pattern, text, re.IGNORECASE)
@@ -281,8 +407,7 @@ def is_older_than_days(date_text, days, promoted):
 def save_raw_filtered(rows, days):
     file_exists = os.path.isfile(OUTPUT_CSV)
     with open(OUTPUT_CSV, mode="a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "id","link","make","model","year","price","km","kw","ps","date","city","promoted"])
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
         if not file_exists:
             writer.writeheader()
         for r in rows:
@@ -323,6 +448,101 @@ def aggregate_data():
         json.dump(result, f, ensure_ascii=False, indent=2)
     return result
 
+
+def load_rows_from_csv():
+    if not os.path.isfile(OUTPUT_CSV):
+        print(f"WARN: Datei „{OUTPUT_CSV}“ wurde nicht gefunden.")
+        return []
+    rows = []
+    with open(OUTPUT_CSV, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            parsed = dict(row)
+            for field in ("price", "year", "km", "kw", "ps"):
+                value = parsed.get(field)
+                if value in (None, ""):
+                    parsed[field] = None
+                    continue
+                try:
+                    parsed[field] = int(value)
+                except ValueError:
+                    parsed[field] = None
+            rows.append(parsed)
+    return rows
+
+
+def display_make_model_summary(agg_data, top_n=15):
+    if not agg_data:
+        print("Keine aggregierten Daten verfügbar. Bitte zuerst Daten sammeln.")
+        return
+    print("\nTop Automarken/-Modelle nach Anzahl der Inserate:")
+    print(f"{'Marke/Modell':40} {'Anzahl':>8} {'Ø-Preis':>12}")
+    sorted_items = sorted(
+        agg_data.items(),
+        key=lambda item: item[1]["count_total"],
+        reverse=True,
+    )
+    for key, stats in sorted_items[:top_n]:
+        avg = stats.get("avg_price")
+        avg_txt = f"{avg:,.0f}".replace(",", " ") if avg is not None else "-"
+        print(f"{key:40} {stats['count_total']:>8} {avg_txt:>12}")
+
+
+def display_avg_price_by_model_year(rows, min_listings=1):
+    if not rows:
+        print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
+        return
+    groups = defaultdict(lambda: {"count": 0, "sum": 0})
+    for row in rows:
+        price = row.get("price")
+        year = row.get("year")
+        if price is None or year is None:
+            continue
+        key = (row.get("make") or "Unbekannt", row.get("model") or "Unbekannt", year)
+        groups[key]["count"] += 1
+        groups[key]["sum"] += price
+    if not groups:
+        print("Nicht genügend Daten mit Preis und Baujahr vorhanden.")
+        return
+    print("\nDurchschnittspreise nach Modell und Baujahr:")
+    print(f"{'Marke':15} {'Modell':25} {'Baujahr':>8} {'Anzahl':>8} {'Ø-Preis':>12}")
+    sorted_groups = sorted(
+        groups.items(),
+        key=lambda item: (-item[1]["count"], item[0][2], item[0][0], item[0][1]),
+    )
+    for (make, model, year), stats in sorted_groups:
+        if stats["count"] < min_listings:
+            continue
+        avg_price = stats["sum"] / stats["count"]
+        avg_txt = f"{avg_price:,.0f}".replace(",", " ")
+        print(
+            f"{make:15} {model[:25]:25} {year:>8} "
+            f"{stats['count']:>8} {avg_txt:>12}"
+        )
+
+
+def analysis_menu(agg_data):
+    if not agg_data and not os.path.isfile(OUTPUT_CSV):
+        print("\nKeine Daten für Analysen vorhanden.")
+        return
+    csv_rows = None
+    while True:
+        print("\nAnalysemenü:")
+        print("  1) Häufigste Automarken und Modelle (CSV/JSON)")
+        print("  2) Durchschnittspreise pro Modell und Baujahr")
+        print("  3) Analyse verlassen")
+        choice = input("Bitte Auswahl eingeben: ").strip()
+        if choice == "1":
+            display_make_model_summary(agg_data)
+        elif choice == "2":
+            if csv_rows is None:
+                csv_rows = load_rows_from_csv()
+            display_avg_price_by_model_year(csv_rows, min_listings=1)
+        elif choice == "3":
+            break
+        else:
+            print("Ungültige Auswahl. Bitte erneut versuchen.")
+
 def main():
     clear_screen()
     print("====================================")
@@ -360,6 +580,31 @@ def main():
     else:
         limit = None
 
+    detail_input = input("Genaue Erfassung aktivieren? (j/N – Enter = nein): ").strip().lower()
+    enable_detail_capture = detail_input in {"j", "ja", "y", "yes"}
+    detail_delay_range = None
+    if enable_detail_capture:
+        print("INFO: Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet, um Detaildaten zu übernehmen.")
+        delay_input = input(
+            "Pause zwischen Detailseiten in Sekunden (Enter = 1–2 Sekunden, 0 = keine): "
+        ).strip()
+        if not delay_input:
+            detail_delay_range = (1.0, 2.0)
+            print("INFO: Verwende Standardpause von 1–2 Sekunden.")
+        elif delay_input == "0":
+            detail_delay_range = None
+            print("INFO: Keine zusätzliche Pause zwischen den Detailseiten.")
+        else:
+            try:
+                value = float(delay_input.replace(",", "."))
+                if value < 0:
+                    raise ValueError
+                detail_delay_range = (value, value)
+                print(f"INFO: Verwende feste Pause von {value:.2f} Sekunden.")
+            except ValueError:
+                detail_delay_range = (1.0, 2.0)
+                print("WARN: Ungültige Eingabe – verwende Standardpause von 1–2 Sekunden.")
+
     driver = init_driver()
     if os.path.isfile(OUTPUT_CSV):
         os.remove(OUTPUT_CSV)
@@ -371,6 +616,11 @@ def main():
         for page in range(1, 200):
             html     = fetch_page(driver, search_term, page)
             listings = parse_listing(html)
+            enrich_listings_with_details(
+                listings,
+                enable_detail_capture,
+                delay_range=detail_delay_range,
+            )
             found_on_page = len(listings)
             total_found  += found_on_page
 
@@ -410,7 +660,8 @@ def main():
         f"{total_found} Einträge geprüft, {total_saved} davon gespeichert."
     )
 
-    aggregate_data()
+    agg_data = aggregate_data()
+    analysis_menu(agg_data)
 
 if __name__ == "__main__":
     main()
