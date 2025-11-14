@@ -76,6 +76,9 @@ def parse_listing(html):
         price_text  = price_elem.get_text(strip=True) if price_elem else None
         desc_text   = desc_elem.get_text(strip=True) if desc_elem else ""
         date_text   = date_elem.get_text(strip=True) if date_elem else None
+        parsed_date = parse_mk_date(date_text) if date_text else None
+        if parsed_date:
+            date_text = parsed_date.strftime("%Y-%m-%d %H:%M")
         city_text   = city_elem.get_text(strip=True) if city_elem else None
         is_promoted = bool(promoted_elem)
 
@@ -151,7 +154,16 @@ def clean_price(price_text):
 def parse_mk_date(date_text):
     if not date_text:
         return None
-    txt = date_text.strip().lower()
+    raw = date_text.strip()
+    txt = raw.lower()
+
+    # Bereits normalisierte Datumsstrings (z. B. "2024-01-05 13:45") unterstützen.
+    for candidate in (raw, raw.replace("T", " ")):
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            pass
+
     if txt.startswith("вчера"):
         parts = txt.split()
         hour, minute = 0, 0
@@ -162,6 +174,16 @@ def parse_mk_date(date_text):
                 hour, minute = 0, 0
         dt = datetime.now() - timedelta(days=1)
         dt = dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return dt
+    if txt.startswith("денес"):
+        parts = txt.split()
+        hour, minute = 0, 0
+        if len(parts) >= 2 and ":" in parts[1]:
+            try:
+                hour, minute = map(int, parts[1].split(":"))
+            except:
+                hour, minute = 0, 0
+        dt = datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
         return dt
     parts = date_text.split()
     if len(parts) < 3:
@@ -174,8 +196,14 @@ def parse_mk_date(date_text):
         month     = MK_MONTHS.get(month_txt)
         if not month:
             return None
-        year = datetime.now().year
-        return datetime(year, month, day, hour, minute)
+        now = datetime.now()
+        year = now.year
+        dt = datetime(year, month, day, hour, minute)
+        # Anzeigen enthalten kein Jahr. Fällt der Monat/Tag in die Zukunft,
+        # stammt das Inserat höchstwahrscheinlich aus dem Vorjahr.
+        if dt > now + timedelta(days=1):
+            dt = datetime(year - 1, month, day, hour, minute)
+        return dt
     except Exception:
         return None
 
