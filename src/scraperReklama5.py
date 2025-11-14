@@ -630,11 +630,6 @@ def main():
         for page in range(1, 200):
             html     = fetch_page(driver, search_term, page)
             listings = parse_listing(html)
-            enrich_listings_with_details(
-                listings,
-                enable_detail_capture,
-                delay_range=detail_delay_range,
-            )
             found_on_page = len(listings)
             total_found  += found_on_page
 
@@ -642,14 +637,26 @@ def main():
                 print(f"INFO: Keine Listings auf Seite {page} → Stop.")
                 break
 
+            eligible_listings = [
+                item for item in listings
+                if item["date"] and is_within_days(item["date"], days, item["promoted"])
+            ]
+
             remaining_limit = None
             if limit is not None:
                 remaining_limit = max(0, limit - total_saved)
                 if remaining_limit == 0:
                     print(f"INFO: Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
                     break
+                eligible_listings = eligible_listings[:remaining_limit]
 
-            saved_in_page = save_raw_filtered(listings, days, limit=remaining_limit)
+            enrich_listings_with_details(
+                eligible_listings,
+                enable_detail_capture,
+                delay_range=detail_delay_range,
+            )
+
+            saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
             total_saved   += saved_in_page
             print(
                 f"INFO: Seite {page}: {found_on_page} Einträge gefunden, "
