@@ -404,15 +404,20 @@ def is_older_than_days(date_text, days, promoted):
         return False
     return dt < datetime.now() - timedelta(days=days)
 
-def save_raw_filtered(rows, days):
+def save_raw_filtered(rows, days, limit=None):
     file_exists = os.path.isfile(OUTPUT_CSV)
+    saved = 0
     with open(OUTPUT_CSV, mode="a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
         if not file_exists:
             writer.writeheader()
         for r in rows:
+            if limit is not None and saved >= limit:
+                break
             if r["date"] and is_within_days(r["date"], days, r["promoted"]):
                 writer.writerow(r)
+                saved += 1
+    return saved
 
 def aggregate_data():
     if not os.path.isfile(OUTPUT_CSV):
@@ -625,11 +630,6 @@ def main():
         for page in range(1, 200):
             html     = fetch_page(driver, search_term, page)
             listings = parse_listing(html)
-            enrich_listings_with_details(
-                listings,
-                enable_detail_capture,
-                delay_range=detail_delay_range,
-            )
             found_on_page = len(listings)
             total_found  += found_on_page
 
@@ -637,8 +637,26 @@ def main():
                 print(f"INFO: Keine Listings auf Seite {page} → Stop.")
                 break
 
-            save_raw_filtered(listings, days)
-            saved_in_page = sum(1 for r in listings if r["date"] and is_within_days(r["date"], days, r["promoted"]))
+            eligible_listings = [
+                item for item in listings
+                if item["date"] and is_within_days(item["date"], days, item["promoted"])
+            ]
+
+            remaining_limit = None
+            if limit is not None:
+                remaining_limit = max(0, limit - total_saved)
+                if remaining_limit == 0:
+                    print(f"INFO: Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
+                    break
+                eligible_listings = eligible_listings[:remaining_limit]
+
+            enrich_listings_with_details(
+                eligible_listings,
+                enable_detail_capture,
+                delay_range=detail_delay_range,
+            )
+
+            saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
             total_saved   += saved_in_page
             print(
                 f"INFO: Seite {page}: {found_on_page} Einträge gefunden, "
