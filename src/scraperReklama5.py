@@ -63,6 +63,26 @@ def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
+def prompt_csv_filename(default_name=OUTPUT_CSV):
+    while True:
+        user_input = input(
+            "CSV-Datei für Analyse verwenden "
+            f"(Enter = {default_name}, q = Abbruch): "
+        ).strip()
+        if not user_input:
+            candidate = default_name
+        elif user_input.lower() in {"q", "quit"}:
+            return None
+        else:
+            candidate = user_input
+        if os.path.isfile(candidate):
+            return candidate
+        print(
+            f"Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen "
+            "oder einen anderen Dateinamen angeben."
+        )
+
+
 def _split_query_pairs(raw_query):
     pairs = []
     if not raw_query:
@@ -484,12 +504,14 @@ def save_raw_filtered(rows, days, limit=None):
                 saved += 1
     return saved
 
-def aggregate_data():
-    if not os.path.isfile(OUTPUT_CSV):
-        print(f"WARN: Datei „{OUTPUT_CSV}“ wurde nicht gefunden. Keine Aggregation möglich.")
+def aggregate_data(csv_filename=OUTPUT_CSV, output_json=OUTPUT_AGG):
+    if not os.path.isfile(csv_filename):
+        print(
+            f"WARN: Datei „{csv_filename}“ wurde nicht gefunden. Keine Aggregation möglich."
+        )
         return {}
     agg = defaultdict(lambda: {"count_total":0, "count_with_price":0, "sum_price":0})
-    with open(OUTPUT_CSV, mode="r", encoding="utf-8") as f:
+    with open(csv_filename, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             make  = row["make"]
@@ -510,17 +532,17 @@ def aggregate_data():
             "count_with_price": val["count_with_price"],
             "avg_price":        avg
         }
-    with open(OUTPUT_AGG, mode="w", encoding="utf-8") as f:
+    with open(output_json, mode="w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     return result
 
 
-def load_rows_from_csv():
-    if not os.path.isfile(OUTPUT_CSV):
-        print(f"WARN: Datei „{OUTPUT_CSV}“ wurde nicht gefunden.")
+def load_rows_from_csv(csv_filename=OUTPUT_CSV):
+    if not os.path.isfile(csv_filename):
+        print(f"WARN: Datei „{csv_filename}“ wurde nicht gefunden.")
         return []
     rows = []
-    with open(OUTPUT_CSV, mode="r", encoding="utf-8") as f:
+    with open(csv_filename, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             parsed = dict(row)
@@ -695,14 +717,15 @@ def prompt_min_price(current_value=500):
             print("Ungültiger Mindestpreis. Bitte erneut versuchen.")
 
 
-def analysis_menu(agg_data):
-    if not os.path.isfile(OUTPUT_CSV):
-        print("\nKeine Daten für Analysen vorhanden.")
+def analysis_menu(csv_filename=OUTPUT_CSV):
+    if not os.path.isfile(csv_filename):
+        print(f"\nKeine Daten für Analysen vorhanden (Datei: {csv_filename}).")
         return
     csv_rows = None
     min_price_for_avg = prompt_min_price(500)
     while True:
         print("\nAnalysemenü:")
+        print(f"  Quelle: {csv_filename}")
         print(f"  Aktueller Mindestpreis: {min_price_for_avg} €")
         print("  1) Häufigste Automarken und Modelle (CSV/JSON)")
         print("  2) Durchschnittspreise pro Modell und Baujahr")
@@ -711,11 +734,11 @@ def analysis_menu(agg_data):
         choice = input("Bitte Auswahl eingeben: ").strip()
         if choice == "1":
             if csv_rows is None:
-                csv_rows = load_rows_from_csv()
+                csv_rows = load_rows_from_csv(csv_filename)
             display_make_model_summary(csv_rows, min_price_for_avg=min_price_for_avg)
         elif choice == "2":
             if csv_rows is None:
-                csv_rows = load_rows_from_csv()
+                csv_rows = load_rows_from_csv(csv_filename)
             display_avg_price_by_model_year(
                 csv_rows,
                 min_listings=1,
@@ -728,12 +751,7 @@ def analysis_menu(agg_data):
         else:
             print("Ungültige Auswahl. Bitte erneut versuchen.")
 
-def main():
-    clear_screen()
-    print("====================================")
-    print("  SCRAPER FÜR reklama5.mk AUTOMOBILE ")
-    print("====================================\n")
-
+def run_scraper_flow():
     print("Wähle die Seite zum Auslesen:")
     print("  1) reklama5")
     choice = input("Deine Wahl (Enter = 1): ").strip() or "1"
@@ -884,8 +902,33 @@ def main():
         f"{total_found} Einträge geprüft, {total_saved} davon gespeichert."
     )
 
-    agg_data = aggregate_data()
-    analysis_menu(agg_data)
+    aggregate_data()
+    analysis_menu(OUTPUT_CSV)
+
+
+def main():
+    clear_screen()
+    print("====================================")
+    print("  SCRAPER FÜR reklama5.mk AUTOMOBILE ")
+    print("====================================\n")
+
+    print("Was möchtest du tun?")
+    print("  1) Neue Suche durchführen")
+    print("  2) Analyse einer bestehenden CSV")
+    start_choice = input("Deine Wahl (Enter = 1): ").strip() or "1"
+
+    if start_choice == "2":
+        csv_filename = prompt_csv_filename()
+        if not csv_filename:
+            print("Keine gültige CSV-Datei angegeben. Programm beendet.")
+            return
+        analysis_menu(csv_filename)
+        return
+    elif start_choice != "1":
+        print("Ungültige Auswahl. Programm beendet.")
+        return
+
+    run_scraper_flow()
 
 if __name__ == "__main__":
     main()
