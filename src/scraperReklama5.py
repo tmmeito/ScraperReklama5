@@ -688,6 +688,20 @@ def main():
         print("Nur ‚reklama5‘ aktuell unterstützt. Programm beendet.")
         return
 
+    global BASE_URL_TEMPLATE
+    print("\nAktuelle Basis-URL-Vorlage:")
+    print(f"  {BASE_URL_TEMPLATE}")
+    new_base_url = input(
+        "Eigene BASE_URL_TEMPLATE verwenden? Platzhalter {search_term} und {page_num} müssen enthalten sein.\n"
+        "(Enter = bestehende Vorlage behalten): "
+    ).strip()
+    if new_base_url:
+        if "{search_term}" in new_base_url and "{page_num}" in new_base_url:
+            BASE_URL_TEMPLATE = new_base_url
+            print("INFO: Neue BASE_URL_TEMPLATE gesetzt.")
+        else:
+            print("WARN: Vorlage muss {search_term} und {page_num} enthalten. Behalte Standard bei.")
+
     search_term = input("Suchbegriff (z. B. „aygo“) eingeben (oder Enter für alle): ").strip()
     search_term = search_term if search_term else ""
 
