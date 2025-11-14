@@ -34,6 +34,11 @@ class ParseMkDateTests(TestCase):
             result = sr.parse_mk_date("вчера 08:30")
         self.assertEqual(result, datetime(2024, 1, 4, 8, 30))
 
+    def test_handles_today_keyword_with_time(self):
+        with patch.object(sr, "datetime", FixedDateTime):
+            result = sr.parse_mk_date("денес 15:45")
+        self.assertEqual(result, datetime(2024, 1, 5, 15, 45))
+
 
 if __name__ == "__main__":
     import unittest

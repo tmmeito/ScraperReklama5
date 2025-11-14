@@ -163,6 +163,16 @@ def parse_mk_date(date_text):
         dt = datetime.now() - timedelta(days=1)
         dt = dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
         return dt
+    if txt.startswith("денес"):
+        parts = txt.split()
+        hour, minute = 0, 0
+        if len(parts) >= 2 and ":" in parts[1]:
+            try:
+                hour, minute = map(int, parts[1].split(":"))
+            except:
+                hour, minute = 0, 0
+        dt = datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return dt
     parts = date_text.split()
     if len(parts) < 3:
         return None
