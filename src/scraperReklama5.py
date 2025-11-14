@@ -499,9 +499,10 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
     for row in rows:
         make = row.get("make") or "Unbekannt"
         model = row.get("model") or "Unbekannt"
+        fuel = row.get("fuel") or "Unbekannt"
         price = row.get("price")
 
-        key = (make, model)
+        key = (make, model, fuel)
         grouped[key]["count_total"] += 1
 
         if price is None:
@@ -518,21 +519,31 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
         return
 
     print("\nTop Automarken/-Modelle nach Anzahl der Inserate:")
-    print(f"{'Marke/Modell':40} {'Anzahl':>8} {'Ø-Preis':>12}")
+    print(f"{'Marke':15} {'Modell':25} {'Treibstoff':15} {'Anzahl':>8} {'Ø-Preis':>12}")
     sorted_items = sorted(
         grouped.items(),
         key=lambda item: item[1]["count_total"],
         reverse=True,
     )
-    for (make, model), stats in sorted_items[:top_n]:
+    top_items = sorted(
+        sorted_items[:top_n],
+        key=lambda item: (
+            item[0][0] or "",
+            item[0][1] or "",
+            item[0][2] or "",
+        ),
+    )
+    for (make, model, fuel), stats in top_items:
         avg = (
             stats["sum"] / stats["count_for_avg"]
             if stats["count_for_avg"]
             else None
         )
         avg_txt = f"{avg:,.0f}".replace(",", " ") if avg is not None else "-"
-        combined_label = f"{make} {model}".strip()
-        print(f"{combined_label:40} {stats['count_total']:>8} {avg_txt:>12}")
+        print(
+            f"{make:15} {model[:25]:25} {fuel[:15]:15} "
+            f"{stats['count_total']:>8} {avg_txt:>12}"
+        )
 
     if excluded_low_price:
         print(
@@ -555,25 +566,38 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
         if price < min_price_for_avg:
             excluded_low_price += 1
             continue
-        key = (row.get("make") or "Unbekannt", row.get("model") or "Unbekannt", year)
+        key = (
+            row.get("make") or "Unbekannt",
+            row.get("model") or "Unbekannt",
+            row.get("fuel") or "Unbekannt",
+            year,
+        )
         groups[key]["count"] += 1
         groups[key]["sum"] += price
     if not groups:
         print("Nicht genügend Daten mit Preis und Baujahr vorhanden.")
         return
     print("\nDurchschnittspreise nach Modell und Baujahr:")
-    print(f"{'Marke':15} {'Modell':25} {'Baujahr':>8} {'Anzahl':>8} {'Ø-Preis':>12}")
+    print(
+        f"{'Marke':15} {'Modell':25} {'Treibstoff':15} "
+        f"{'Baujahr':>8} {'Anzahl':>8} {'Ø-Preis':>12}"
+    )
     sorted_groups = sorted(
         groups.items(),
-        key=lambda item: (-item[1]["count"], item[0][2], item[0][0], item[0][1]),
+        key=lambda item: (
+            item[0][0] or "",
+            item[0][1] or "",
+            item[0][2] or "",
+            item[0][3],
+        ),
     )
-    for (make, model, year), stats in sorted_groups:
+    for (make, model, fuel, year), stats in sorted_groups:
         if stats["count"] < min_listings:
             continue
         avg_price = stats["sum"] / stats["count"]
         avg_txt = f"{avg_price:,.0f}".replace(",", " ")
         print(
-            f"{make:15} {model[:25]:25} {year:>8} "
+            f"{make:15} {model[:25]:25} {fuel[:15]:15} {year:>8} "
             f"{stats['count']:>8} {avg_txt:>12}"
         )
     if excluded_low_price:
@@ -583,29 +607,37 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
         )
 
 
+def prompt_min_price(current_value=500):
+    if current_value is None or current_value < 0:
+        current_value = 500
+    while True:
+        user_input = input(
+            f"Mindestpreis für Durchschnittsberechnung (Enter = {current_value}): "
+        ).strip()
+        if not user_input:
+            return current_value
+        try:
+            value = int(user_input)
+            if value < 0:
+                raise ValueError
+            return value
+        except ValueError:
+            print("Ungültiger Mindestpreis. Bitte erneut versuchen.")
+
+
 def analysis_menu(agg_data):
     if not os.path.isfile(OUTPUT_CSV):
         print("\nKeine Daten für Analysen vorhanden.")
         return
     csv_rows = None
-    min_price_input = input(
-        "Mindestpreis für Durchschnittsberechnung (Enter = 500): "
-    ).strip()
-    if not min_price_input:
-        min_price_for_avg = 500
-    else:
-        try:
-            min_price_for_avg = int(min_price_input)
-            if min_price_for_avg < 0:
-                raise ValueError
-        except ValueError:
-            print("Ungültiger Mindestpreis. Verwende Standardwert 500.")
-            min_price_for_avg = 500
+    min_price_for_avg = prompt_min_price(500)
     while True:
         print("\nAnalysemenü:")
+        print(f"  Aktueller Mindestpreis: {min_price_for_avg} €")
         print("  1) Häufigste Automarken und Modelle (CSV/JSON)")
         print("  2) Durchschnittspreise pro Modell und Baujahr")
-        print("  3) Analyse verlassen")
+        print("  3) Mindestpreis anpassen")
+        print("  4) Analyse verlassen")
         choice = input("Bitte Auswahl eingeben: ").strip()
         if choice == "1":
             if csv_rows is None:
@@ -620,6 +652,8 @@ def analysis_menu(agg_data):
                 min_price_for_avg=min_price_for_avg,
             )
         elif choice == "3":
+            min_price_for_avg = prompt_min_price(min_price_for_avg)
+        elif choice == "4":
             break
         else:
             print("Ungültige Auswahl. Bitte erneut versuchen.")
