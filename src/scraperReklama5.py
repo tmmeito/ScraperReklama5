@@ -441,16 +441,12 @@ def aggregate_data():
         for row in reader:
             make  = row["make"]
             model = row["model"]
-            price = row["price"]
+            price = parse_csv_int_field(row.get("price"))
             key   = f"{make} {model}"
             agg[key]["count_total"] += 1
-            if price is not None and str(price).strip() != "":
-                try:
-                    price_int = int(price)
-                    agg[key]["count_with_price"] += 1
-                    agg[key]["sum_price"] += price_int
-                except:
-                    pass
+            if price is not None:
+                agg[key]["count_with_price"] += 1
+                agg[key]["sum_price"] += price
     result = {}
     for key, val in agg.items():
         avg = None
@@ -476,16 +472,25 @@ def load_rows_from_csv():
         for row in reader:
             parsed = dict(row)
             for field in ("price", "year", "km", "kw", "ps"):
-                value = parsed.get(field)
-                if value in (None, ""):
-                    parsed[field] = None
-                    continue
-                try:
-                    parsed[field] = int(value)
-                except ValueError:
-                    parsed[field] = None
+                parsed[field] = parse_csv_int_field(parsed.get(field))
             rows.append(parsed)
     return rows
+
+
+def parse_csv_int_field(value):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"-?\d+", text):
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 
 def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
