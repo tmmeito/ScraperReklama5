@@ -773,7 +773,9 @@ def analysis_menu(csv_filename=OUTPUT_CSV):
         print("  [2] 💶 Durchschnittspreise pro Modell/Baujahr")
         print("  [3] 🎯 Mindestpreis anpassen")
         print("  [4] ↩️  Analyse beenden")
+        print()
         print("  [0] 🔁 Zurück zum Hauptmenü")
+        print()
         choice = input("Deine Auswahl: ").strip()
         if choice == "1":
             if csv_rows is None:
@@ -807,7 +809,6 @@ def run_scraper_flow():
 
     global BASE_URL_TEMPLATE
     print_section("🔗 Basis-URL-Konfiguration")
-    print(f"    Vorlage: {shorten_url(BASE_URL_TEMPLATE)}")
     new_base_url = input(
         "Eigene Such-URL einfügen (Enter = bestehende URL behalten): "
     ).strip()
@@ -858,13 +859,13 @@ def run_scraper_flow():
     detail_delay_range = None
     if enable_detail_capture:
         print("🔍 Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet.")
+        print()
         random_delay_input = input(
             "Zufällige Pause (ca. 1–2 Sekunden) zwischen Detailseiten einfügen? (Enter = ja, n = feste Pause): "
         ).strip().lower()
         print()
         if random_delay_input in {"", "j", "ja", "y", "yes"}:
             detail_delay_range = (1.0, 2.0)
-            print("⏱️  Verwende zufällige Pause von ca. 1–2 Sekunden.")
         else:
             fixed_delay_input = input(
                 "Feste Pause zwischen Detailseiten in Sekunden (Enter oder 0 = keine): "
@@ -917,7 +918,7 @@ def run_scraper_flow():
             found_on_page = len(eligible_listings)
             total_found  += found_on_page
 
-            print(f"Lade Seite {page:02d}: {found_on_page:02d} Treffer")
+            print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
             print(INLINE_PROGRESS_SYMBOL * found_on_page)
 
             progress_callback = None
@@ -938,7 +939,7 @@ def run_scraper_flow():
 
             saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
             total_saved   += saved_in_page
-            print(f"{found_on_page:02d} Treffer  |  {saved_in_page:02d} gespeichert")
+            print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
             print()
 
             if limit is not None and total_saved >= limit:
@@ -965,7 +966,7 @@ def run_scraper_flow():
     print_section("📦 Zusammenfassung")
     print(
         f"   • Geprüfte Einträge : {total_found}\n"
-        f"   • Gespeicherte Einträge: {total_saved}"
+        f"   • Gespeicherte Einträge: {total_saved}\n"
     )
 
     aggregate_data()
@@ -979,6 +980,7 @@ def main():
         print("Was möchtest du tun?")
         print("  [1] 🔍 Neue Suche durchführen")
         print("  [2] 📊 Analyse einer bestehenden CSV")
+        print()
         print("  [q] ❌ Programm beenden")
         print()
         start_choice = (input("Deine Wahl (Enter = 1): ").strip() or "1").lower()
