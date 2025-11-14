@@ -220,7 +220,7 @@ def parse_spec_line(text):
     return year, km, kw, ps
 
 
-def enrich_listings_with_details(listings, enabled, delay_range=None):
+def enrich_listings_with_details(listings, enabled):
     if not enabled:
         return
     for idx, listing in enumerate(listings, start=1):
