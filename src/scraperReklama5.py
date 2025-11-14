@@ -63,7 +63,7 @@ def parse_listing(html):
 
         title_elem    = link_elem
         price_elem    = listing.select_one("span.search-ad-price")
-        desc_elem     = listing.select_one("div.ad-desc-div col-lg-6 p")  # Hinweis: ggf‐Selector anpassen
+        desc_elem     = listing.select_one("div.ad-desc-div p")
         date_elem     = (
             listing.select_one("div.ad-date-div-1 span") or
             listing.select_one("div.ad-date-div-2 span") or
@@ -85,30 +85,32 @@ def parse_listing(html):
         make, model, year = extract_details(title)
         price = clean_price(price_text) if price_text else None
 
-        # Extraktion km, kW, PS
-        km   = None
-        kw   = None
-        ps   = None
+        spec_text = extract_spec_line(listing)
+        spec_year, km, kw, ps = parse_spec_line(spec_text)
 
-        m_km = re.search(r"(\d{1,3}(?:[\.,]\d{3})*|\d+)\s*km", desc_text, re.IGNORECASE)
-        if m_km:
-            km = int(m_km.group(1).replace(".","").replace(",",""))
-
-        m_kw = re.search(r"(\d+)\s*kW", desc_text, re.IGNORECASE)
-        if m_kw:
-            kw = int(m_kw.group(1))
-
-        m_ps = re.search(r"\((\d+)\s*Hp\)", desc_text, re.IGNORECASE)
-        if not m_ps:
-            m_ps = re.search(r"(\d+)\s*HP", desc_text, re.IGNORECASE)
-        if m_ps:
-            ps = int(m_ps.group(1))
-
-        # Falls year noch None, versuche aus desc_text
-        if year is None:
+        if spec_year is not None:
+            year = spec_year
+        elif year is None:
             m_year = re.search(r"(\b19|20)\d{2}\b", desc_text)
             if m_year:
                 year = int(m_year.group(0))
+
+        if km is None:
+            m_km = re.search(r"(\d{1,3}(?:[\.,]\d{3})*|\d+)\s*km", desc_text, re.IGNORECASE)
+            if m_km:
+                km = int(m_km.group(1).replace(".","").replace(",",""))
+
+        if kw is None:
+            m_kw = re.search(r"(\d+)\s*kW", desc_text, re.IGNORECASE)
+            if m_kw:
+                kw = int(m_kw.group(1))
+
+        if ps is None:
+            m_ps = re.search(r"\((\d+)\s*Hp\)", desc_text, re.IGNORECASE)
+            if not m_ps:
+                m_ps = re.search(r"(\d+)\s*HP", desc_text, re.IGNORECASE)
+            if m_ps:
+                ps = int(m_ps.group(1))
 
         results.append({
             "id":       ad_id,
@@ -138,6 +140,53 @@ def extract_details(title):
         except:
             year = None
     return make, model, year
+
+def extract_spec_line(listing):
+    candidate_selectors = [
+        "div.search-ad-info p",
+        "div.searchAdInfo p",
+        "div.ad-info p",
+        "div.ad-desc-div p",
+        "p"
+    ]
+    for selector in candidate_selectors:
+        for elem in listing.select(selector):
+            text = elem.get_text(" ", strip=True)
+            if looks_like_spec_line(text):
+                return text
+    return None
+
+def looks_like_spec_line(text):
+    if not text:
+        return False
+    lowered = text.lower()
+    has_year = bool(re.search(r"\b(19|20)\d{2}\b", text))
+    has_km   = "km" in lowered or "км" in lowered
+    has_kw   = "kw" in lowered or "кв" in lowered
+    has_ps   = "hp" in lowered or "кс" in lowered
+    return has_year and (has_km or has_kw or has_ps)
+
+def parse_spec_line(text):
+    if not text:
+        return None, None, None, None
+    normalized = re.sub(r"\s+", " ", text)
+    year = extract_first_int(normalized, r"\b((?:19|20)\d{2})\b")
+    km   = extract_first_int(normalized, r"([\d\.\,\s]+)\s*(?:km|км)")
+    kw   = extract_first_int(normalized, r"([\d\.\,\s]+)\s*(?:kW|кW|кв)")
+    ps   = extract_first_int(normalized, r"\((\d+)\s*(?:Hp|HP|кс)\)")
+    return year, km, kw, ps
+
+def extract_first_int(text, pattern):
+    m = re.search(pattern, text, re.IGNORECASE)
+    if not m:
+        return None
+    digits = re.sub(r"[^0-9]", "", m.group(1))
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None
 
 def clean_price(price_text):
     price_text = price_text.replace(".", "").replace(" ","").replace(" ","")
