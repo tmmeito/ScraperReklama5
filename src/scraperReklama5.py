@@ -163,6 +163,16 @@ def parse_mk_date(date_text):
         dt = datetime.now() - timedelta(days=1)
         dt = dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
         return dt
+    if txt.startswith("денес"):
+        parts = txt.split()
+        hour, minute = 0, 0
+        if len(parts) >= 2 and ":" in parts[1]:
+            try:
+                hour, minute = map(int, parts[1].split(":"))
+            except:
+                hour, minute = 0, 0
+        dt = datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return dt
     parts = date_text.split()
     if len(parts) < 3:
         return None
@@ -174,8 +184,14 @@ def parse_mk_date(date_text):
         month     = MK_MONTHS.get(month_txt)
         if not month:
             return None
-        year = datetime.now().year
-        return datetime(year, month, day, hour, minute)
+        now = datetime.now()
+        year = now.year
+        dt = datetime(year, month, day, hour, minute)
+        # Anzeigen enthalten kein Jahr. Fällt der Monat/Tag in die Zukunft,
+        # stammt das Inserat höchstwahrscheinlich aus dem Vorjahr.
+        if dt > now + timedelta(days=1):
+            dt = datetime(year - 1, month, day, hour, minute)
+        return dt
     except Exception:
         return None
 
