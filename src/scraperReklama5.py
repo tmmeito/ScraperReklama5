@@ -235,6 +235,10 @@ def enrich_listings_with_details(listings, enabled):
                 continue
             listing[key] = value
         print(f"INFO: Detaildaten für Anzeige {listing.get('id')} geladen ({idx}/{len(listings)}).")
+        if delay_range:
+            wait_time = random.uniform(*delay_range)
+            print(f"INFO: Warte {wait_time:.2f} Sekunden vor nächster Detailseite …")
+            time.sleep(wait_time)
 
 
 def fetch_detail_attributes(url):
@@ -578,8 +582,28 @@ def main():
 
     detail_input = input("Genaue Erfassung aktivieren? (j/N – Enter = nein): ").strip().lower()
     enable_detail_capture = detail_input in {"j", "ja", "y", "yes"}
+    detail_delay_range = None
     if enable_detail_capture:
         print("INFO: Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet, um Detaildaten zu übernehmen.")
+        delay_input = input(
+            "Pause zwischen Detailseiten in Sekunden (Enter = 1–2 Sekunden, 0 = keine): "
+        ).strip()
+        if not delay_input:
+            detail_delay_range = (1.0, 2.0)
+            print("INFO: Verwende Standardpause von 1–2 Sekunden.")
+        elif delay_input == "0":
+            detail_delay_range = None
+            print("INFO: Keine zusätzliche Pause zwischen den Detailseiten.")
+        else:
+            try:
+                value = float(delay_input.replace(",", "."))
+                if value < 0:
+                    raise ValueError
+                detail_delay_range = (value, value)
+                print(f"INFO: Verwende feste Pause von {value:.2f} Sekunden.")
+            except ValueError:
+                detail_delay_range = (1.0, 2.0)
+                print("WARN: Ungültige Eingabe – verwende Standardpause von 1–2 Sekunden.")
 
     driver = init_driver()
     if os.path.isfile(OUTPUT_CSV):
@@ -592,7 +616,7 @@ def main():
         for page in range(1, 200):
             html     = fetch_page(driver, search_term, page)
             listings = parse_listing(html)
-            enrich_listings_with_details(listings, enable_detail_capture)
+            enrich_listings_with_details(listings, enable_detail_capture, detail_delay_range)
             found_on_page = len(listings)
             total_found  += found_on_page
 
