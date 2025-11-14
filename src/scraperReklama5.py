@@ -63,6 +63,24 @@ def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
+def print_banner(title):
+    line = "═" * 70
+    print(f"\n{line}\n  {title}\n{line}\n")
+
+
+def print_section(title):
+    line = "─" * 70
+    print(f"\n{line}\n{title}\n{line}")
+
+
+def shorten_url(url, max_length=48):
+    if not url:
+        return ""
+    if len(url) <= max_length:
+        return url
+    return url[: max_length - 3] + "..."
+
+
 def prompt_csv_filename(default_name=OUTPUT_CSV):
     while True:
         user_input = input(
@@ -78,7 +96,7 @@ def prompt_csv_filename(default_name=OUTPUT_CSV):
         if os.path.isfile(candidate):
             return candidate
         print(
-            f"Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen "
+            f"⚠️  Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen "
             "oder einen anderen Dateinamen angeben."
         )
 
@@ -141,7 +159,7 @@ def init_driver():
 
 def fetch_page(driver, search_term, page_num):
     url = BASE_URL_TEMPLATE.format(search_term=search_term, page_num=page_num)
-    print(f"INFO: Fetching page {page_num} → {url}")
+    print(f"🔎 Lade Seite {page_num:02d} | Quelle: {shorten_url(url)}")
     driver.get(url)
     try:
         WebDriverWait(driver, 15).until(
@@ -317,12 +335,12 @@ def enrich_listings_with_details(listings, enabled, delay_range=None, max_items=
                 continue
             listing[key] = value
         print(
-            "INFO: Detaildaten für Anzeige "
-            f"{listing.get('id')} geladen ({idx}/{total_to_process})."
+            "🧩 Detaildaten aktualisiert | "
+            f"ID {listing.get('id')} ({idx}/{total_to_process})"
         )
         if delay_range:
             wait_time = random.uniform(*delay_range)
-            print(f"INFO: Warte {wait_time:.2f} Sekunden vor nächster Detailseite …")
+            print(f"⏱️  Warte {wait_time:.2f} Sekunden vor nächster Detailseite …")
             time.sleep(wait_time)
 
 
@@ -335,7 +353,10 @@ def fetch_detail_attributes(url):
         with urllib_request.urlopen(req, timeout=15) as response:
             html = response.read()
     except urllib_error.URLError as exc:
-        print(f"WARNING: Detailseite {url} konnte nicht geladen werden: {exc}")
+        print(
+            "⚠️  Detailseite konnte nicht geladen werden | "
+            f"{shorten_url(url)} ({exc})"
+        )
         return {}
     soup = BeautifulSoup(html, "html.parser")
     raw = {}
@@ -507,7 +528,7 @@ def save_raw_filtered(rows, days, limit=None):
 def aggregate_data(csv_filename=OUTPUT_CSV, output_json=OUTPUT_AGG):
     if not os.path.isfile(csv_filename):
         print(
-            f"WARN: Datei „{csv_filename}“ wurde nicht gefunden. Keine Aggregation möglich."
+            f"⚠️  Datei „{csv_filename}“ wurde nicht gefunden. Keine Aggregation möglich."
         )
         return {}
     agg = defaultdict(lambda: {"count_total":0, "count_with_price":0, "sum_price":0})
@@ -719,19 +740,20 @@ def prompt_min_price(current_value=500):
 
 def analysis_menu(csv_filename=OUTPUT_CSV):
     if not os.path.isfile(csv_filename):
-        print(f"\nKeine Daten für Analysen vorhanden (Datei: {csv_filename}).")
-        return
+        print(f"\n⚠️  Keine Daten für Analysen vorhanden (Datei: {csv_filename}).")
+        return "exit"
     csv_rows = None
     min_price_for_avg = prompt_min_price(500)
     while True:
-        print("\nAnalysemenü:")
-        print(f"  Quelle: {csv_filename}")
-        print(f"  Aktueller Mindestpreis: {min_price_for_avg} €")
-        print("  1) Häufigste Automarken und Modelle (CSV/JSON)")
-        print("  2) Durchschnittspreise pro Modell und Baujahr")
-        print("  3) Mindestpreis anpassen")
-        print("  4) Analyse verlassen")
-        choice = input("Bitte Auswahl eingeben: ").strip()
+        print_section("📊 Analyse-Center")
+        print(f"   • Quelle........: {csv_filename}")
+        print(f"   • Mindestpreis..: {min_price_for_avg} €")
+        print("\n  [1] 📈 Häufigste Automarken und Modelle")
+        print("  [2] 💶 Durchschnittspreise pro Modell/Baujahr")
+        print("  [3] 🎯 Mindestpreis anpassen")
+        print("  [4] ↩️  Analyse beenden")
+        print("  [0] 🔁 Zurück zum Hauptmenü")
+        choice = input("Deine Auswahl: ").strip()
         if choice == "1":
             if csv_rows is None:
                 csv_rows = load_rows_from_csv(csv_filename)
@@ -746,22 +768,24 @@ def analysis_menu(csv_filename=OUTPUT_CSV):
             )
         elif choice == "3":
             min_price_for_avg = prompt_min_price(min_price_for_avg)
+        elif choice == "0":
+            return "main"
         elif choice == "4":
-            break
+            return "exit"
         else:
-            print("Ungültige Auswahl. Bitte erneut versuchen.")
+            print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
 
 def run_scraper_flow():
-    print("Wähle die Seite zum Auslesen:")
-    print("  1) reklama5")
+    print_section("🚀 Neue Suche starten")
+    print("  [1] reklama5.mk")
     choice = input("Deine Wahl (Enter = 1): ").strip() or "1"
     if choice != "1":
-        print("Nur ‚reklama5‘ aktuell unterstützt. Programm beendet.")
-        return
+        print("⚠️  Nur ‚reklama5‘ aktuell unterstützt. Zurück zum Hauptmenü.")
+        return "main"
 
     global BASE_URL_TEMPLATE
-    print("\nAktuelle Basis-URL-Vorlage:")
-    print(f"  {BASE_URL_TEMPLATE}")
+    print_section("🔗 Basis-URL-Konfiguration")
+    print(f"    Vorlage: {shorten_url(BASE_URL_TEMPLATE)}")
     new_base_url = input(
         "Eigene Such-URL einfügen (z. B. aus dem Browser kopiert).\n"
         "Platzhalter {search_term} und {page_num} werden automatisch ergänzt.\n"
@@ -770,11 +794,12 @@ def run_scraper_flow():
     if new_base_url:
         try:
             BASE_URL_TEMPLATE = build_base_url_template(new_base_url)
-            print("INFO: Verwende neue Basis-URL-Vorlage:")
-            print(f"  {BASE_URL_TEMPLATE}")
+            print("✨ Verwende neue Basis-URL-Vorlage:")
+            print(f"    {shorten_url(BASE_URL_TEMPLATE)}")
         except ValueError as exc:
-            print(f"WARN: {exc} Behalte Standard bei.")
+            print(f"⚠️  {exc} Behalte Standard bei.")
 
+    print_section("🔎 Suchparameter")
     search_term = input("Suchbegriff (z. B. „aygo“) eingeben (oder Enter für alle): ").strip()
     search_term = search_term if search_term else ""
 
@@ -789,8 +814,8 @@ def run_scraper_flow():
             if days <= 0:
                 raise ValueError
         except ValueError:
-            print("Ungültige Eingabe von Tagen. Programm beendet.")
-            return
+            print("⚠️  Ungültige Eingabe von Tagen. Zurück zum Hauptmenü.")
+            return "main"
 
     limit_input = input("Wieviele Einträge sollen maximal eingelesen werden? (Enter = alle): ").strip()
     if limit_input:
@@ -799,8 +824,8 @@ def run_scraper_flow():
             if limit <= 0:
                 raise ValueError
         except ValueError:
-            print("Ungültige Eingabe für Eintrags-Limit. Programm beendet.")
-            return
+            print("⚠️  Ungültige Eingabe für Eintrags-Limit. Zurück zum Hauptmenü.")
+            return "main"
     else:
         limit = None
 
@@ -808,30 +833,30 @@ def run_scraper_flow():
     enable_detail_capture = detail_input in {"j", "ja", "y", "yes"}
     detail_delay_range = None
     if enable_detail_capture:
-        print("INFO: Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet, um Detaildaten zu übernehmen.")
+        print("🔍 Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet.")
         random_delay_input = input(
             "Zufällige Pause (ca. 1–2 Sekunden) zwischen Detailseiten einfügen? (Enter = ja, n = feste Pause): "
         ).strip().lower()
         if random_delay_input in {"", "j", "ja", "y", "yes"}:
             detail_delay_range = (1.0, 2.0)
-            print("INFO: Verwende zufällige Pause von ca. 1–2 Sekunden.")
+            print("⏱️  Verwende zufällige Pause von ca. 1–2 Sekunden.")
         else:
             fixed_delay_input = input(
                 "Feste Pause zwischen Detailseiten in Sekunden (Enter oder 0 = keine): "
             ).strip()
             if not fixed_delay_input or fixed_delay_input == "0":
                 detail_delay_range = None
-                print("INFO: Keine zusätzliche Pause zwischen den Detailseiten.")
+                print("⚡ Keine zusätzliche Pause zwischen den Detailseiten.")
             else:
                 try:
                     value = float(fixed_delay_input.replace(",", "."))
                     if value < 0:
                         raise ValueError
                     detail_delay_range = (value, value)
-                    print(f"INFO: Verwende feste Pause von {value:.2f} Sekunden.")
+                    print(f"⏱️  Verwende feste Pause von {value:.2f} Sekunden.")
                 except ValueError:
                     detail_delay_range = (1.0, 2.0)
-                    print("WARN: Ungültige Eingabe – verwende zufällige Pause von 1–2 Sekunden.")
+                    print("⚠️  Ungültige Eingabe – verwende zufällige Pause von 1–2 Sekunden.")
 
     driver = init_driver()
     if os.path.isfile(OUTPUT_CSV):
@@ -848,7 +873,7 @@ def run_scraper_flow():
             total_found  += found_on_page
 
             if not listings:
-                print(f"INFO: Keine Listings auf Seite {page} → Stop.")
+                print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
                 break
 
             eligible_listings = [
@@ -860,7 +885,7 @@ def run_scraper_flow():
             if limit is not None:
                 remaining_limit = max(0, limit - total_saved)
                 if remaining_limit == 0:
-                    print(f"INFO: Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
+                    print(f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
                     break
                 eligible_listings = eligible_listings[:remaining_limit]
 
@@ -874,61 +899,75 @@ def run_scraper_flow():
             saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
             total_saved   += saved_in_page
             print(
-                f"INFO: Seite {page}: {found_on_page} Einträge gefunden, "
-                f"{saved_in_page} nach Filter übernommen."
+                f"📄 Seite {page:02d}: {found_on_page} Treffer | "
+                f"{saved_in_page} gespeichert"
             )
 
             if limit is not None and total_saved >= limit:
-                print(f"INFO: Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
+                print(f"ℹ️  Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
                 break
 
             stop = False
             for item in listings:
                 if item["date"] and is_older_than_days(item["date"], days, item["promoted"]):
-                    print(f"INFO: Anzeige älter als {days} Tage gefunden (id={item['id']}) auf Seite {page}. Stop.")
+                    print(
+                        f"ℹ️  Anzeige älter als {days} Tage gefunden "
+                        f"(ID {item['id']}) auf Seite {page}. Stop."
+                    )
                     stop = True
                     break
             if stop:
                 break
 
             sleep_time = random.uniform(2,4)
-            print(f"INFO: Sleeping {sleep_time:.2f} seconds")
+            print(f"💤 Pause {sleep_time:.2f} Sekunden vor nächster Seite")
             time.sleep(sleep_time)
     finally:
         driver.quit()
 
+    print_section("📦 Zusammenfassung")
     print(
-        "\nINFO: Gesamtsumme: "
-        f"{total_found} Einträge geprüft, {total_saved} davon gespeichert."
+        f"   • Geprüfte Einträge : {total_found}\n"
+        f"   • Gespeicherte Einträge: {total_saved}"
     )
 
     aggregate_data()
-    analysis_menu(OUTPUT_CSV)
+    return analysis_menu(OUTPUT_CSV)
 
 
 def main():
-    clear_screen()
-    print("====================================")
-    print("  SCRAPER FÜR reklama5.mk AUTOMOBILE ")
-    print("====================================\n")
+    while True:
+        clear_screen()
+        print_banner("SCRAPER FÜR reklama5.mk AUTOMOBILE")
+        print("Was möchtest du tun?")
+        print("  [1] 🔍 Neue Suche durchführen")
+        print("  [2] 📊 Analyse einer bestehenden CSV")
+        print("  [q] ❌ Programm beenden")
+        start_choice = (input("Deine Wahl (Enter = 1): ").strip() or "1").lower()
 
-    print("Was möchtest du tun?")
-    print("  1) Neue Suche durchführen")
-    print("  2) Analyse einer bestehenden CSV")
-    start_choice = input("Deine Wahl (Enter = 1): ").strip() or "1"
-
-    if start_choice == "2":
-        csv_filename = prompt_csv_filename()
-        if not csv_filename:
-            print("Keine gültige CSV-Datei angegeben. Programm beendet.")
-            return
-        analysis_menu(csv_filename)
-        return
-    elif start_choice != "1":
-        print("Ungültige Auswahl. Programm beendet.")
-        return
-
-    run_scraper_flow()
+        if start_choice in {"q", "quit", "3"}:
+            print("👋 Bis zum nächsten Mal!")
+            break
+        if start_choice == "2":
+            csv_filename = prompt_csv_filename()
+            if not csv_filename:
+                print("⚠️  Keine gültige CSV-Datei angegeben. Zurück zum Hauptmenü …")
+                time.sleep(1.5)
+                continue
+            outcome = analysis_menu(csv_filename)
+            if outcome == "main":
+                continue
+            print("👋 Bis zum nächsten Mal!")
+            break
+        elif start_choice == "1":
+            outcome = run_scraper_flow()
+            if outcome == "main":
+                continue
+            print("👋 Bis zum nächsten Mal!")
+            break
+        else:
+            print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
+            time.sleep(1.5)
 
 if __name__ == "__main__":
     main()
