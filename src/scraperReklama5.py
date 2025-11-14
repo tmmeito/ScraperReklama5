@@ -58,7 +58,6 @@ def parse_listing(html):
     soup     = BeautifulSoup(html, "html.parser")
     results  = []
     listings = soup.select("div.row.ad-top-div")
-    print(f"INFO: Found {len(listings)} listings on this page")
     for listing in listings:
         link_elem     = listing.select_one("h3 > a.SearchAdTitle")
         if not link_elem:
@@ -365,12 +364,15 @@ def main():
     if os.path.isfile(OUTPUT_CSV):
         os.remove(OUTPUT_CSV)
 
-    total_saved = 0
+    total_found   = 0
+    total_saved   = 0
 
     try:
         for page in range(1, 200):
             html     = fetch_page(driver, search_term, page)
             listings = parse_listing(html)
+            found_on_page = len(listings)
+            total_found  += found_on_page
 
             if not listings:
                 print(f"INFO: Keine Listings auf Seite {page} → Stop.")
@@ -378,8 +380,11 @@ def main():
 
             save_raw_filtered(listings, days)
             saved_in_page = sum(1 for r in listings if r["date"] and is_within_days(r["date"], days, r["promoted"]))
-            total_saved += saved_in_page
-            print(f"INFO: Gespeichert {saved_in_page} neue Einträge (gesamt {total_saved}).")
+            total_saved   += saved_in_page
+            print(
+                f"INFO: Seite {page}: {found_on_page} Einträge gefunden, "
+                f"{saved_in_page} nach Filter übernommen."
+            )
 
             if limit is not None and total_saved >= limit:
                 print(f"INFO: Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
@@ -399,6 +404,11 @@ def main():
             time.sleep(sleep_time)
     finally:
         driver.quit()
+
+    print(
+        "\nINFO: Gesamtsumme: "
+        f"{total_found} Einträge geprüft, {total_saved} davon gespeichert."
+    )
 
     agg = aggregate_data()
     print("\nINFO: Aggregation result:")
