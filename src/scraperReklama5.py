@@ -220,7 +220,7 @@ def parse_spec_line(text):
     return year, km, kw, ps
 
 
-def enrich_listings_with_details(listings, enabled):
+def enrich_listings_with_details(listings, enabled, delay_range=None):
     if not enabled:
         return
     for idx, listing in enumerate(listings, start=1):
@@ -616,7 +616,11 @@ def main():
         for page in range(1, 200):
             html     = fetch_page(driver, search_term, page)
             listings = parse_listing(html)
-            enrich_listings_with_details(listings, enable_detail_capture, detail_delay_range)
+            enrich_listings_with_details(
+                listings,
+                enable_detail_capture,
+                delay_range=detail_delay_range,
+            )
             found_on_page = len(listings)
             total_found  += found_on_page
 
