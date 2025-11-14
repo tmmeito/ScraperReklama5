@@ -410,13 +410,7 @@ def main():
         f"{total_found} Einträge geprüft, {total_saved} davon gespeichert."
     )
 
-    agg = aggregate_data()
-    print("\nINFO: Aggregation result:")
-    for k, v in agg.items():
-        if v["avg_price"] is not None:
-            print(f"{k}: {v['count_total']} listings, {v['count_with_price']} mit Preis, avg price {v['avg_price']:.2f}")
-        else:
-            print(f"{k}: {v['count_total']} listings, {v['count_with_price']} mit Preis, avg price N/A")
+    aggregate_data()
 
 if __name__ == "__main__":
     main()
