@@ -349,14 +349,17 @@ def main():
         print("Ungültige Eingabe von Tagen. Programm beendet.")
         return
 
-    limit_input = input("Wieviele Einträge sollen maximal eingelesen werden? (z. B. 999 = alle): ").strip()
-    try:
-        limit = int(limit_input)
-        if limit <= 0:
-            raise ValueError
-    except ValueError:
-        print("Ungültige Eingabe für Eintrags-Limit. Programm beendet.")
-        return
+    limit_input = input("Wieviele Einträge sollen maximal eingelesen werden? (Enter = alle): ").strip()
+    if limit_input:
+        try:
+            limit = int(limit_input)
+            if limit <= 0:
+                raise ValueError
+        except ValueError:
+            print("Ungültige Eingabe für Eintrags-Limit. Programm beendet.")
+            return
+    else:
+        limit = None
 
     driver = init_driver()
     if os.path.isfile(OUTPUT_CSV):
@@ -378,7 +381,7 @@ def main():
             total_saved += saved_in_page
             print(f"INFO: Gespeichert {saved_in_page} neue Einträge (gesamt {total_saved}).")
 
-            if limit != 999 and total_saved >= limit:
+            if limit is not None and total_saved >= limit:
                 print(f"INFO: Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
                 break
 
