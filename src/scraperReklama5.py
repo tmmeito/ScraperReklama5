@@ -6,8 +6,15 @@ import re
 import os
 import csv
 import json
+import warnings
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+try:
+    from urllib3.exceptions import NotOpenSSLWarning
+    warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
+except Exception:
+    pass
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
