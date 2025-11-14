@@ -493,8 +493,14 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
         print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
         return
 
-    grouped = defaultdict(lambda: {"count_total": 0, "count_for_avg": 0, "sum": 0})
-    excluded_low_price = 0
+    grouped = defaultdict(
+        lambda: {
+            "count_total": 0,
+            "count_for_avg": 0,
+            "sum": 0,
+            "excluded_low_price": 0,
+        }
+    )
 
     for row in rows:
         make = row.get("make") or "Unbekannt"
@@ -508,7 +514,7 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
         if price is None:
             continue
         if price < min_price_for_avg:
-            excluded_low_price += 1
+            grouped[key]["excluded_low_price"] += 1
             continue
 
         grouped[key]["count_for_avg"] += 1
@@ -544,11 +550,9 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
             f"{make:15} {model[:25]:25} {fuel[:15]:15} "
             f"{stats['count_total']:>8} {avg_txt:>12}"
         )
-
-    if excluded_low_price:
         print(
-            f"\nHinweis: {excluded_low_price} Anzeigen unter {min_price_for_avg} "
-            "wurden für die Durchschnittspreise nicht berücksichtigt."
+            f"    Anzeigen unter {min_price_for_avg} €: "
+            f"{stats.get('excluded_low_price', 0)}"
         )
 
 
@@ -556,15 +560,20 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
     if not rows:
         print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
         return
-    groups = defaultdict(lambda: {"count": 0, "sum": 0})
-    excluded_low_price = 0
+    groups = defaultdict(lambda: {"count": 0, "sum": 0, "excluded_low_price": 0})
     for row in rows:
         price = row.get("price")
         year = row.get("year")
         if price is None or year is None:
             continue
         if price < min_price_for_avg:
-            excluded_low_price += 1
+            key = (
+                row.get("make") or "Unbekannt",
+                row.get("model") or "Unbekannt",
+                row.get("fuel") or "Unbekannt",
+                year,
+            )
+            groups[key]["excluded_low_price"] += 1
             continue
         key = (
             row.get("make") or "Unbekannt",
@@ -600,10 +609,9 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
             f"{make:15} {model[:25]:25} {fuel[:15]:15} {year:>8} "
             f"{stats['count']:>8} {avg_txt:>12}"
         )
-    if excluded_low_price:
         print(
-            f"\nHinweis: {excluded_low_price} Anzeigen unter {min_price_for_avg} "
-            "wurden für die Durchschnittspreise nicht berücksichtigt."
+            f"    Anzeigen unter {min_price_for_avg} €: "
+            f"{stats.get('excluded_low_price', 0)}"
         )
 
 
