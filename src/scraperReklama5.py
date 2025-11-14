@@ -174,8 +174,14 @@ def parse_mk_date(date_text):
         month     = MK_MONTHS.get(month_txt)
         if not month:
             return None
-        year = datetime.now().year
-        return datetime(year, month, day, hour, minute)
+        now = datetime.now()
+        year = now.year
+        dt = datetime(year, month, day, hour, minute)
+        # Anzeigen enthalten kein Jahr. Fällt der Monat/Tag in die Zukunft,
+        # stammt das Inserat höchstwahrscheinlich aus dem Vorjahr.
+        if dt > now + timedelta(days=1):
+            dt = datetime(year - 1, month, day, hour, minute)
+        return dt
     except Exception:
         return None
 
