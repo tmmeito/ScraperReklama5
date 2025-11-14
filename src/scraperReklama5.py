@@ -551,7 +551,7 @@ def main():
 
     print("Wähle die Seite zum Auslesen:")
     print("  1) reklama5")
-    choice = input("Deine Wahl (Ziffer): ").strip()
+    choice = input("Deine Wahl (Enter = 1): ").strip() or "1"
     if choice != "1":
         print("Nur ‚reklama5‘ aktuell unterstützt. Programm beendet.")
         return
@@ -585,25 +585,29 @@ def main():
     detail_delay_range = None
     if enable_detail_capture:
         print("INFO: Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet, um Detaildaten zu übernehmen.")
-        delay_input = input(
-            "Pause zwischen Detailseiten in Sekunden (Enter = 1–2 Sekunden, 0 = keine): "
-        ).strip()
-        if not delay_input:
+        random_delay_input = input(
+            "Zufällige Pause (ca. 1–2 Sekunden) zwischen Detailseiten einfügen? (Enter = ja, n = feste Pause): "
+        ).strip().lower()
+        if random_delay_input in {"", "j", "ja", "y", "yes"}:
             detail_delay_range = (1.0, 2.0)
-            print("INFO: Verwende Standardpause von 1–2 Sekunden.")
-        elif delay_input == "0":
-            detail_delay_range = None
-            print("INFO: Keine zusätzliche Pause zwischen den Detailseiten.")
+            print("INFO: Verwende zufällige Pause von ca. 1–2 Sekunden.")
         else:
-            try:
-                value = float(delay_input.replace(",", "."))
-                if value < 0:
-                    raise ValueError
-                detail_delay_range = (value, value)
-                print(f"INFO: Verwende feste Pause von {value:.2f} Sekunden.")
-            except ValueError:
-                detail_delay_range = (1.0, 2.0)
-                print("WARN: Ungültige Eingabe – verwende Standardpause von 1–2 Sekunden.")
+            fixed_delay_input = input(
+                "Feste Pause zwischen Detailseiten in Sekunden (Enter oder 0 = keine): "
+            ).strip()
+            if not fixed_delay_input or fixed_delay_input == "0":
+                detail_delay_range = None
+                print("INFO: Keine zusätzliche Pause zwischen den Detailseiten.")
+            else:
+                try:
+                    value = float(fixed_delay_input.replace(",", "."))
+                    if value < 0:
+                        raise ValueError
+                    detail_delay_range = (value, value)
+                    print(f"INFO: Verwende feste Pause von {value:.2f} Sekunden.")
+                except ValueError:
+                    detail_delay_range = (1.0, 2.0)
+                    print("WARN: Ungültige Eingabe – verwende zufällige Pause von 1–2 Sekunden.")
 
     driver = init_driver()
     if os.path.isfile(OUTPUT_CSV):
