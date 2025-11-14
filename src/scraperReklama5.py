@@ -496,7 +496,7 @@ def display_avg_price_by_model_year(rows, min_listings=1):
     for row in rows:
         price = row.get("price")
         year = row.get("year")
-        if price is None or year is None:
+        if price is None or price <= 500 or year is None:
             continue
         key = (row.get("make") or "Unbekannt", row.get("model") or "Unbekannt", year)
         groups[key]["count"] += 1
@@ -559,14 +559,19 @@ def main():
     search_term = input("Suchbegriff (z. B. „aygo“) eingeben (oder Enter für alle): ").strip()
     search_term = search_term if search_term else ""
 
-    days_input = input("Wie viele Tage zurück sollen berücksichtigt werden? (Ganze Zahl): ").strip()
-    try:
-        days = int(days_input)
-        if days <= 0:
-            raise ValueError
-    except ValueError:
-        print("Ungültige Eingabe von Tagen. Programm beendet.")
-        return
+    days_input = input(
+        "Wie viele Tage zurück sollen berücksichtigt werden? (Enter = 1 Tag): "
+    ).strip()
+    if not days_input:
+        days = 1
+    else:
+        try:
+            days = int(days_input)
+            if days <= 0:
+                raise ValueError
+        except ValueError:
+            print("Ungültige Eingabe von Tagen. Programm beendet.")
+            return
 
     limit_input = input("Wieviele Einträge sollen maximal eingelesen werden? (Enter = alle): ").strip()
     if limit_input:
