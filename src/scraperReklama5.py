@@ -7,6 +7,7 @@ import os
 import csv
 import json
 import warnings
+from itertools import islice
 from datetime import datetime, timedelta
 from collections import defaultdict
 from urllib import request as urllib_request
@@ -220,10 +221,18 @@ def parse_spec_line(text):
     return year, km, kw, ps
 
 
-def enrich_listings_with_details(listings, enabled, delay_range=None):
-    if not enabled:
+def enrich_listings_with_details(listings, enabled, delay_range=None, max_items=None):
+    if not enabled or not listings:
         return
-    for idx, listing in enumerate(listings, start=1):
+
+    if max_items is not None:
+        total_to_process = min(len(listings), max_items)
+        iterator = islice(listings, total_to_process)
+    else:
+        total_to_process = len(listings)
+        iterator = iter(listings)
+
+    for idx, listing in enumerate(iterator, start=1):
         link = listing.get("link")
         if not link:
             continue
@@ -234,7 +243,10 @@ def enrich_listings_with_details(listings, enabled, delay_range=None):
             if value in (None, ""):
                 continue
             listing[key] = value
-        print(f"INFO: Detaildaten für Anzeige {listing.get('id')} geladen ({idx}/{len(listings)}).")
+        print(
+            "INFO: Detaildaten für Anzeige "
+            f"{listing.get('id')} geladen ({idx}/{total_to_process})."
+        )
         if delay_range:
             wait_time = random.uniform(*delay_range)
             print(f"INFO: Warte {wait_time:.2f} Sekunden vor nächster Detailseite …")
@@ -654,6 +666,7 @@ def main():
                 eligible_listings,
                 enable_detail_capture,
                 delay_range=detail_delay_range,
+                max_items=remaining_limit if limit is not None else None,
             )
 
             saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
