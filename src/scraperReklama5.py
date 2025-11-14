@@ -159,7 +159,7 @@ def init_driver():
 
 def fetch_page(driver, search_term, page_num):
     url = BASE_URL_TEMPLATE.format(search_term=search_term, page_num=page_num)
-    print(f"🔎 Lade Seite {page_num:02d} | Quelle: {shorten_url(url)}")
+    print(f"🔎 Lade Seite {page_num:02d}: ", end="", flush=True)
     driver.get(url)
     try:
         WebDriverWait(driver, 15).until(
@@ -312,7 +312,9 @@ def parse_spec_line(text):
     return year, km, kw, ps
 
 
-def enrich_listings_with_details(listings, enabled, delay_range=None, max_items=None):
+def enrich_listings_with_details(
+    listings, enabled, delay_range=None, max_items=None, progress_callback=None
+):
     if not enabled or not listings:
         return
 
@@ -334,13 +336,10 @@ def enrich_listings_with_details(listings, enabled, delay_range=None, max_items=
             if value in (None, ""):
                 continue
             listing[key] = value
-        print(
-            "🧩 Detaildaten aktualisiert | "
-            f"ID {listing.get('id')} ({idx}/{total_to_process})"
-        )
+        if progress_callback:
+            progress_callback()
         if delay_range:
             wait_time = random.uniform(*delay_range)
-            print(f"⏱️  Warte {wait_time:.2f} Sekunden vor nächster Detailseite …")
             time.sleep(wait_time)
 
 
@@ -778,6 +777,7 @@ def analysis_menu(csv_filename=OUTPUT_CSV):
 def run_scraper_flow():
     print_section("🚀 Neue Suche starten")
     print("  [1] reklama5.mk")
+    print()
     choice = input("Deine Wahl (Enter = 1): ").strip() or "1"
     if choice != "1":
         print("⚠️  Nur ‚reklama5‘ aktuell unterstützt. Zurück zum Hauptmenü.")
@@ -787,9 +787,7 @@ def run_scraper_flow():
     print_section("🔗 Basis-URL-Konfiguration")
     print(f"    Vorlage: {shorten_url(BASE_URL_TEMPLATE)}")
     new_base_url = input(
-        "Eigene Such-URL einfügen (z. B. aus dem Browser kopiert).\n"
-        "Platzhalter {search_term} und {page_num} werden automatisch ergänzt.\n"
-        "(Enter = bestehende Vorlage behalten): "
+        "Eigene Such-URL einfügen (Enter = bestehende URL behalten): "
     ).strip()
     if new_base_url:
         try:
@@ -801,11 +799,13 @@ def run_scraper_flow():
 
     print_section("🔎 Suchparameter")
     search_term = input("Suchbegriff (z. B. „aygo“) eingeben (oder Enter für alle): ").strip()
+    print()
     search_term = search_term if search_term else ""
 
     days_input = input(
         "Wie viele Tage zurück sollen berücksichtigt werden? (Enter = 1 Tag): "
     ).strip()
+    print()
     if not days_input:
         days = 1
     else:
@@ -818,6 +818,7 @@ def run_scraper_flow():
             return "main"
 
     limit_input = input("Wieviele Einträge sollen maximal eingelesen werden? (Enter = alle): ").strip()
+    print()
     if limit_input:
         try:
             limit = int(limit_input)
@@ -830,6 +831,7 @@ def run_scraper_flow():
         limit = None
 
     detail_input = input("Genaue Erfassung aktivieren? (j/N – Enter = nein): ").strip().lower()
+    print()
     enable_detail_capture = detail_input in {"j", "ja", "y", "yes"}
     detail_delay_range = None
     if enable_detail_capture:
@@ -837,6 +839,7 @@ def run_scraper_flow():
         random_delay_input = input(
             "Zufällige Pause (ca. 1–2 Sekunden) zwischen Detailseiten einfügen? (Enter = ja, n = feste Pause): "
         ).strip().lower()
+        print()
         if random_delay_input in {"", "j", "ja", "y", "yes"}:
             detail_delay_range = (1.0, 2.0)
             print("⏱️  Verwende zufällige Pause von ca. 1–2 Sekunden.")
@@ -844,6 +847,7 @@ def run_scraper_flow():
             fixed_delay_input = input(
                 "Feste Pause zwischen Detailseiten in Sekunden (Enter oder 0 = keine): "
             ).strip()
+            print()
             if not fixed_delay_input or fixed_delay_input == "0":
                 detail_delay_range = None
                 print("⚡ Keine zusätzliche Pause zwischen den Detailseiten.")
@@ -873,6 +877,7 @@ def run_scraper_flow():
             total_found  += found_on_page
 
             if not listings:
+                print()
                 print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
                 break
 
@@ -889,12 +894,17 @@ def run_scraper_flow():
                     break
                 eligible_listings = eligible_listings[:remaining_limit]
 
+            progress_callback = None
+            if enable_detail_capture:
+                progress_callback = lambda: print(".", end="", flush=True)
             enrich_listings_with_details(
                 eligible_listings,
                 enable_detail_capture,
                 delay_range=detail_delay_range,
                 max_items=remaining_limit if limit is not None else None,
+                progress_callback=progress_callback,
             )
+            print()
 
             saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
             total_saved   += saved_in_page
@@ -943,6 +953,7 @@ def main():
         print("  [1] 🔍 Neue Suche durchführen")
         print("  [2] 📊 Analyse einer bestehenden CSV")
         print("  [q] ❌ Programm beenden")
+        print()
         start_choice = (input("Deine Wahl (Enter = 1): ").strip() or "1").lower()
 
         if start_choice in {"q", "quit", "3"}:
