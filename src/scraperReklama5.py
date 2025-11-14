@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from urllib import request as urllib_request
 from urllib import error as urllib_error
+from urllib.parse import urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -60,6 +61,58 @@ MK_MONTHS = {
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def _split_query_pairs(raw_query):
+    pairs = []
+    if not raw_query:
+        return pairs
+    for part in raw_query.split("&"):
+        if not part:
+            continue
+        if "=" in part:
+            key, value = part.split("=", 1)
+        else:
+            key, value = part, ""
+        pairs.append([key, value])
+    return pairs
+
+
+def _ensure_placeholder(pairs, target_key, placeholder_value):
+    target_lower = target_key.lower()
+    for pair in pairs:
+        if pair[0].lower() == target_lower:
+            pair[1] = placeholder_value
+            return
+    pairs.append([target_key, placeholder_value])
+
+
+def _rebuild_query_string(pairs):
+    if not pairs:
+        return ""
+    parts = []
+    for key, value in pairs:
+        if value == "":
+            parts.append(f"{key}=")
+        else:
+            parts.append(f"{key}={value}")
+    return "&".join(parts)
+
+
+def build_base_url_template(raw_input):
+    trimmed = raw_input.strip()
+    if not trimmed:
+        return None
+    if "{search_term}" in trimmed and "{page_num}" in trimmed:
+        return trimmed
+    parsed = urlsplit(trimmed)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError("Ungültige URL – bitte vollständige Adresse angeben.")
+    query_pairs = _split_query_pairs(parsed.query)
+    _ensure_placeholder(query_pairs, "q", "{search_term}")
+    _ensure_placeholder(query_pairs, "page", "{page_num}")
+    new_query = _rebuild_query_string(query_pairs)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
 def init_driver():
     options = webdriver.SafariOptions()
@@ -687,6 +740,22 @@ def main():
     if choice != "1":
         print("Nur ‚reklama5‘ aktuell unterstützt. Programm beendet.")
         return
+
+    global BASE_URL_TEMPLATE
+    print("\nAktuelle Basis-URL-Vorlage:")
+    print(f"  {BASE_URL_TEMPLATE}")
+    new_base_url = input(
+        "Eigene Such-URL einfügen (z. B. aus dem Browser kopiert).\n"
+        "Platzhalter {search_term} und {page_num} werden automatisch ergänzt.\n"
+        "(Enter = bestehende Vorlage behalten): "
+    ).strip()
+    if new_base_url:
+        try:
+            BASE_URL_TEMPLATE = build_base_url_template(new_base_url)
+            print("INFO: Verwende neue Basis-URL-Vorlage:")
+            print(f"  {BASE_URL_TEMPLATE}")
+        except ValueError as exc:
+            print(f"WARN: {exc} Behalte Standard bei.")
 
     search_term = input("Suchbegriff (z. B. „aygo“) eingeben (oder Enter für alle): ").strip()
     search_term = search_term if search_term else ""
