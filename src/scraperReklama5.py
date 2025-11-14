@@ -472,19 +472,22 @@ def load_rows_from_csv():
         for row in reader:
             parsed = dict(row)
             for field in ("price", "year", "km", "kw", "ps"):
-                parsed[field] = parse_csv_int_field(parsed.get(field))
+                default_empty = 0 if field == "price" else None
+                parsed[field] = parse_csv_int_field(
+                    parsed.get(field), default_empty=default_empty
+                )
             rows.append(parsed)
     return rows
 
 
-def parse_csv_int_field(value):
+def parse_csv_int_field(value, default_empty=None):
     if value is None:
         return None
     if isinstance(value, int):
         return value
     text = str(value).strip()
     if not text:
-        return None
+        return default_empty
     if not re.fullmatch(r"-?\d+", text):
         return None
     try:
