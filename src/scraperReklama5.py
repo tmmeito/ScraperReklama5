@@ -323,6 +323,101 @@ def aggregate_data():
         json.dump(result, f, ensure_ascii=False, indent=2)
     return result
 
+
+def load_rows_from_csv():
+    if not os.path.isfile(OUTPUT_CSV):
+        print(f"WARN: Datei „{OUTPUT_CSV}“ wurde nicht gefunden.")
+        return []
+    rows = []
+    with open(OUTPUT_CSV, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            parsed = dict(row)
+            for field in ("price", "year", "km", "kw", "ps"):
+                value = parsed.get(field)
+                if value in (None, ""):
+                    parsed[field] = None
+                    continue
+                try:
+                    parsed[field] = int(value)
+                except ValueError:
+                    parsed[field] = None
+            rows.append(parsed)
+    return rows
+
+
+def display_make_model_summary(agg_data, top_n=15):
+    if not agg_data:
+        print("Keine aggregierten Daten verfügbar. Bitte zuerst Daten sammeln.")
+        return
+    print("\nTop Automarken/-Modelle nach Anzahl der Inserate:")
+    print(f"{'Marke/Modell':40} {'Anzahl':>8} {'Ø-Preis':>12}")
+    sorted_items = sorted(
+        agg_data.items(),
+        key=lambda item: item[1]["count_total"],
+        reverse=True,
+    )
+    for key, stats in sorted_items[:top_n]:
+        avg = stats.get("avg_price")
+        avg_txt = f"{avg:,.0f}".replace(",", " ") if avg is not None else "-"
+        print(f"{key:40} {stats['count_total']:>8} {avg_txt:>12}")
+
+
+def display_avg_price_by_model_year(rows, min_listings=1):
+    if not rows:
+        print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
+        return
+    groups = defaultdict(lambda: {"count": 0, "sum": 0})
+    for row in rows:
+        price = row.get("price")
+        year = row.get("year")
+        if price is None or year is None:
+            continue
+        key = (row.get("make") or "Unbekannt", row.get("model") or "Unbekannt", year)
+        groups[key]["count"] += 1
+        groups[key]["sum"] += price
+    if not groups:
+        print("Nicht genügend Daten mit Preis und Baujahr vorhanden.")
+        return
+    print("\nDurchschnittspreise nach Modell und Baujahr:")
+    print(f"{'Marke':15} {'Modell':25} {'Baujahr':>8} {'Anzahl':>8} {'Ø-Preis':>12}")
+    sorted_groups = sorted(
+        groups.items(),
+        key=lambda item: (-item[1]["count"], item[0][2], item[0][0], item[0][1]),
+    )
+    for (make, model, year), stats in sorted_groups:
+        if stats["count"] < min_listings:
+            continue
+        avg_price = stats["sum"] / stats["count"]
+        avg_txt = f"{avg_price:,.0f}".replace(",", " ")
+        print(
+            f"{make:15} {model[:25]:25} {year:>8} "
+            f"{stats['count']:>8} {avg_txt:>12}"
+        )
+
+
+def analysis_menu(agg_data):
+    if not agg_data and not os.path.isfile(OUTPUT_CSV):
+        print("\nKeine Daten für Analysen vorhanden.")
+        return
+    csv_rows = None
+    while True:
+        print("\nAnalysemenü:")
+        print("  1) Häufigste Automarken und Modelle (CSV/JSON)")
+        print("  2) Durchschnittspreise pro Modell und Baujahr")
+        print("  3) Analyse verlassen")
+        choice = input("Bitte Auswahl eingeben: ").strip()
+        if choice == "1":
+            display_make_model_summary(agg_data)
+        elif choice == "2":
+            if csv_rows is None:
+                csv_rows = load_rows_from_csv()
+            display_avg_price_by_model_year(csv_rows, min_listings=1)
+        elif choice == "3":
+            break
+        else:
+            print("Ungültige Auswahl. Bitte erneut versuchen.")
+
 def main():
     clear_screen()
     print("====================================")
@@ -410,7 +505,8 @@ def main():
         f"{total_found} Einträge geprüft, {total_saved} davon gespeichert."
     )
 
-    aggregate_data()
+    agg_data = aggregate_data()
+    analysis_menu(agg_data)
 
 if __name__ == "__main__":
     main()
