@@ -37,6 +37,8 @@ CSV_FIELDNAMES = [
     "emission_class", "date", "city", "promoted"
 ]
 
+INLINE_PROGRESS_SYMBOL = "•"
+
 DETAIL_FIELD_MAP = {
     "марка": "make",
     "модел": "model",
@@ -71,6 +73,29 @@ def print_banner(title):
 def print_section(title):
     line = "─" * 70
     print(f"\n{line}\n{title}\n{line}")
+
+
+def build_inline_progress_printer(total, symbol=INLINE_PROGRESS_SYMBOL):
+    if total <= 0:
+        return None, None
+
+    state = {"count": 0, "done": False}
+
+    def callback():
+        if state["done"]:
+            return
+        print(symbol, end="", flush=True)
+        state["count"] += 1
+        if state["count"] >= total:
+            print()
+            state["done"] = True
+
+    def finalize():
+        if not state["done"]:
+            print()
+            state["done"] = True
+
+    return callback, finalize
 
 
 def shorten_url(url, max_length=48):
@@ -159,7 +184,6 @@ def init_driver():
 
 def fetch_page(driver, search_term, page_num):
     url = BASE_URL_TEMPLATE.format(search_term=search_term, page_num=page_num)
-    print(f"🔎 Lade Seite {page_num:02d}: ", end="", flush=True)
     driver.get(url)
     try:
         WebDriverWait(driver, 15).until(
@@ -327,15 +351,13 @@ def enrich_listings_with_details(
 
     for idx, listing in enumerate(iterator, start=1):
         link = listing.get("link")
-        if not link:
-            continue
-        details = fetch_detail_attributes(link)
-        if not details:
-            continue
-        for key, value in details.items():
-            if value in (None, ""):
-                continue
-            listing[key] = value
+        if link:
+            details = fetch_detail_attributes(link)
+            if details:
+                for key, value in details.items():
+                    if value in (None, ""):
+                        continue
+                    listing[key] = value
         if progress_callback:
             progress_callback()
         if delay_range:
@@ -873,8 +895,6 @@ def run_scraper_flow():
         for page in range(1, 200):
             html     = fetch_page(driver, search_term, page)
             listings = parse_listing(html)
-            found_on_page = len(listings)
-            total_found  += found_on_page
 
             if not listings:
                 print()
@@ -894,9 +914,17 @@ def run_scraper_flow():
                     break
                 eligible_listings = eligible_listings[:remaining_limit]
 
+            found_on_page = len(eligible_listings)
+            total_found  += found_on_page
+
+            print(f"Lade Seite {page:02d}: {found_on_page:02d} Treffer")
+            print(INLINE_PROGRESS_SYMBOL * found_on_page)
+
             progress_callback = None
-            if enable_detail_capture:
-                progress_callback = lambda: print(".", end="", flush=True)
+            progress_finalize = None
+            if enable_detail_capture and found_on_page:
+                progress_callback, progress_finalize = build_inline_progress_printer(found_on_page)
+
             enrich_listings_with_details(
                 eligible_listings,
                 enable_detail_capture,
@@ -904,14 +932,14 @@ def run_scraper_flow():
                 max_items=remaining_limit if limit is not None else None,
                 progress_callback=progress_callback,
             )
-            print()
+
+            if progress_finalize:
+                progress_finalize()
 
             saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
             total_saved   += saved_in_page
-            print(
-                f"📄 Seite {page:02d}: {found_on_page} Treffer | "
-                f"{saved_in_page} gespeichert"
-            )
+            print(f"{found_on_page:02d} Treffer  |  {saved_in_page:02d} gespeichert")
+            print()
 
             if limit is not None and total_saved >= limit:
                 print(f"ℹ️  Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
@@ -930,7 +958,6 @@ def run_scraper_flow():
                 break
 
             sleep_time = random.uniform(2,4)
-            print(f"💤 Pause {sleep_time:.2f} Sekunden vor nächster Seite")
             time.sleep(sleep_time)
     finally:
         driver.quit()
