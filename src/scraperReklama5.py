@@ -525,7 +525,7 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
         return
 
     print("\nTop Automarken/-Modelle nach Anzahl der Inserate:")
-    print(f"{'Marke':15} {'Modell':25} {'Treibstoff':15} {'Anzahl':>8} {'Ø-Preis':>12}")
+    print(f"{'Marke':15} {'Modell':25} {'Treibstoff':15} {'Anzahl':>12} {'Ø-Preis':>12}")
     sorted_items = sorted(
         grouped.items(),
         key=lambda item: item[1]["count_total"],
@@ -546,13 +546,12 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
             else None
         )
         avg_txt = f"{avg:,.0f}".replace(",", " ") if avg is not None else "-"
+        excluded = stats.get("excluded_low_price", 0)
+        excluded_txt = "-" if not excluded else str(excluded)
+        count_txt = f"{stats['count_total']} ({excluded_txt})"
         print(
             f"{make:15} {model[:25]:25} {fuel[:15]:15} "
-            f"{stats['count_total']:>8} {avg_txt:>12}"
-        )
-        print(
-            f"    Anzeigen unter {min_price_for_avg} €: "
-            f"{stats.get('excluded_low_price', 0)}"
+            f"{count_txt:>12} {avg_txt:>12}"
         )
 
 
@@ -560,20 +559,18 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
     if not rows:
         print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
         return
-    groups = defaultdict(lambda: {"count": 0, "sum": 0, "excluded_low_price": 0})
+    groups = defaultdict(
+        lambda: {
+            "count": 0,
+            "count_total": 0,
+            "sum": 0,
+            "excluded_low_price": 0,
+        }
+    )
     for row in rows:
         price = row.get("price")
         year = row.get("year")
         if price is None or year is None:
-            continue
-        if price < min_price_for_avg:
-            key = (
-                row.get("make") or "Unbekannt",
-                row.get("model") or "Unbekannt",
-                row.get("fuel") or "Unbekannt",
-                year,
-            )
-            groups[key]["excluded_low_price"] += 1
             continue
         key = (
             row.get("make") or "Unbekannt",
@@ -581,6 +578,10 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
             row.get("fuel") or "Unbekannt",
             year,
         )
+        groups[key]["count_total"] += 1
+        if price < min_price_for_avg:
+            groups[key]["excluded_low_price"] += 1
+            continue
         groups[key]["count"] += 1
         groups[key]["sum"] += price
     if not groups:
@@ -588,16 +589,16 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
         return
     print("\nDurchschnittspreise nach Modell und Baujahr:")
     print(
-        f"{'Marke':15} {'Modell':25} {'Treibstoff':15} "
-        f"{'Baujahr':>8} {'Anzahl':>8} {'Ø-Preis':>12}"
+        f"{'Marke':15} {'Modell':25} {'Baujahr':>8} "
+        f"{'Treibstoff':15} {'Anzahl':>12} {'Ø-Preis':>12}"
     )
     sorted_groups = sorted(
         groups.items(),
         key=lambda item: (
             item[0][0] or "",
             item[0][1] or "",
-            item[0][2] or "",
             item[0][3],
+            item[0][2] or "",
         ),
     )
     for (make, model, fuel, year), stats in sorted_groups:
@@ -605,13 +606,13 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
             continue
         avg_price = stats["sum"] / stats["count"]
         avg_txt = f"{avg_price:,.0f}".replace(",", " ")
+        excluded = stats.get("excluded_low_price", 0)
+        excluded_txt = "-" if not excluded else str(excluded)
+        count_total = stats["count_total"]
+        count_txt = f"{count_total} ({excluded_txt})"
         print(
-            f"{make:15} {model[:25]:25} {fuel[:15]:15} {year:>8} "
-            f"{stats['count']:>8} {avg_txt:>12}"
-        )
-        print(
-            f"    Anzeigen unter {min_price_for_avg} €: "
-            f"{stats.get('excluded_low_price', 0)}"
+            f"{make:15} {model[:25]:25} {year:>8} {fuel[:15]:15} "
+            f"{count_txt:>12} {avg_txt:>12}"
         )
 
 
