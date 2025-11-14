@@ -488,32 +488,72 @@ def load_rows_from_csv():
     return rows
 
 
-def display_make_model_summary(agg_data, top_n=15):
-    if not agg_data:
-        print("Keine aggregierten Daten verfügbar. Bitte zuerst Daten sammeln.")
+def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
+    if not rows:
+        print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
         return
+
+    grouped = defaultdict(lambda: {"count_total": 0, "count_for_avg": 0, "sum": 0})
+    excluded_low_price = 0
+
+    for row in rows:
+        make = row.get("make") or "Unbekannt"
+        model = row.get("model") or "Unbekannt"
+        price = row.get("price")
+
+        key = (make, model)
+        grouped[key]["count_total"] += 1
+
+        if price is None:
+            continue
+        if price < min_price_for_avg:
+            excluded_low_price += 1
+            continue
+
+        grouped[key]["count_for_avg"] += 1
+        grouped[key]["sum"] += price
+
+    if not grouped:
+        print("Keine Daten für die Auswertung verfügbar.")
+        return
+
     print("\nTop Automarken/-Modelle nach Anzahl der Inserate:")
     print(f"{'Marke/Modell':40} {'Anzahl':>8} {'Ø-Preis':>12}")
     sorted_items = sorted(
-        agg_data.items(),
+        grouped.items(),
         key=lambda item: item[1]["count_total"],
         reverse=True,
     )
-    for key, stats in sorted_items[:top_n]:
-        avg = stats.get("avg_price")
+    for (make, model), stats in sorted_items[:top_n]:
+        avg = (
+            stats["sum"] / stats["count_for_avg"]
+            if stats["count_for_avg"]
+            else None
+        )
         avg_txt = f"{avg:,.0f}".replace(",", " ") if avg is not None else "-"
-        print(f"{key:40} {stats['count_total']:>8} {avg_txt:>12}")
+        combined_label = f"{make} {model}".strip()
+        print(f"{combined_label:40} {stats['count_total']:>8} {avg_txt:>12}")
+
+    if excluded_low_price:
+        print(
+            f"\nHinweis: {excluded_low_price} Anzeigen unter {min_price_for_avg} "
+            "wurden für die Durchschnittspreise nicht berücksichtigt."
+        )
 
 
-def display_avg_price_by_model_year(rows, min_listings=1):
+def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500):
     if not rows:
         print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
         return
     groups = defaultdict(lambda: {"count": 0, "sum": 0})
+    excluded_low_price = 0
     for row in rows:
         price = row.get("price")
         year = row.get("year")
-        if price is None or price <= 500 or year is None:
+        if price is None or year is None:
+            continue
+        if price < min_price_for_avg:
+            excluded_low_price += 1
             continue
         key = (row.get("make") or "Unbekannt", row.get("model") or "Unbekannt", year)
         groups[key]["count"] += 1
@@ -536,13 +576,31 @@ def display_avg_price_by_model_year(rows, min_listings=1):
             f"{make:15} {model[:25]:25} {year:>8} "
             f"{stats['count']:>8} {avg_txt:>12}"
         )
+    if excluded_low_price:
+        print(
+            f"\nHinweis: {excluded_low_price} Anzeigen unter {min_price_for_avg} "
+            "wurden für die Durchschnittspreise nicht berücksichtigt."
+        )
 
 
 def analysis_menu(agg_data):
-    if not agg_data and not os.path.isfile(OUTPUT_CSV):
+    if not os.path.isfile(OUTPUT_CSV):
         print("\nKeine Daten für Analysen vorhanden.")
         return
     csv_rows = None
+    min_price_input = input(
+        "Mindestpreis für Durchschnittsberechnung (Enter = 500): "
+    ).strip()
+    if not min_price_input:
+        min_price_for_avg = 500
+    else:
+        try:
+            min_price_for_avg = int(min_price_input)
+            if min_price_for_avg < 0:
+                raise ValueError
+        except ValueError:
+            print("Ungültiger Mindestpreis. Verwende Standardwert 500.")
+            min_price_for_avg = 500
     while True:
         print("\nAnalysemenü:")
         print("  1) Häufigste Automarken und Modelle (CSV/JSON)")
@@ -550,11 +608,17 @@ def analysis_menu(agg_data):
         print("  3) Analyse verlassen")
         choice = input("Bitte Auswahl eingeben: ").strip()
         if choice == "1":
-            display_make_model_summary(agg_data)
+            if csv_rows is None:
+                csv_rows = load_rows_from_csv()
+            display_make_model_summary(csv_rows, min_price_for_avg=min_price_for_avg)
         elif choice == "2":
             if csv_rows is None:
                 csv_rows = load_rows_from_csv()
-            display_avg_price_by_model_year(csv_rows, min_listings=1)
+            display_avg_price_by_model_year(
+                csv_rows,
+                min_listings=1,
+                min_price_for_avg=min_price_for_avg,
+            )
         elif choice == "3":
             break
         else:
