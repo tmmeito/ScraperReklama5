@@ -1555,169 +1555,217 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         "db_path": db_path,
     }
 
-def run_scraper_flow():
-    print_section("🚀 Neue Suche starten")
-    print("ℹ️  Aktuell wird nur reklama5.mk unterstützt."
-          " Die Standardwerte stammen aus dem Menü ⚙️ Einstellungen.")
-    print()
 
-    settings = current_settings
-    global BASE_URL_TEMPLATE
-    base_url_default = settings.base_url_template or BASE_URL_TEMPLATE
-    print_section("🔗 Basis-URL-Konfiguration")
-    print(f"Standard: {shorten_url(base_url_default)}")
-    new_base_url = input(
-        "Eigene Such-URL einfügen (Enter = Standard verwenden): "
-    ).strip()
-    if new_base_url:
-        try:
-            base_url = build_base_url_template(new_base_url)
-            print("✨ Verwende neue Basis-URL-Vorlage:")
-            print(f"    {shorten_url(base_url)}")
-        except ValueError as exc:
-            print(f"⚠️  {exc} Behalte Standard bei.")
-            base_url = base_url_default
-    else:
-        base_url = base_url_default
-    BASE_URL_TEMPLATE = base_url
-
-    print_section("🔎 Suchparameter")
-    default_search = settings.search_term or "alle"
-    search_term_input = input(
-        f"Suchbegriff (Enter = {default_search}): "
-    ).strip()
-    print()
-    search_term = search_term_input if search_term_input else settings.search_term or ""
-
-    days_label = settings.days or 1
-    days_input = input(
-        f"Wie viele Tage zurück sollen berücksichtigt werden? (Enter = {days_label}): "
-    ).strip()
-    print()
-    if not days_input:
-        days = days_label
-    else:
-        try:
-            days = int(days_input)
-            if days <= 0:
-                raise ValueError
-        except ValueError:
-            print("⚠️  Ungültige Eingabe von Tagen. Zurück zum Hauptmenü.")
-            return "main"
-
+def _format_settings_summary(settings):
     limit_label = settings.limit if settings.limit is not None else "alle"
-    limit_input = input(
-        f"Wieviele Einträge sollen maximal eingelesen werden? (Enter = {limit_label}): "
-    ).strip()
-    print()
-    if limit_input:
-        try:
-            limit = int(limit_input)
-            if limit <= 0:
-                raise ValueError
-        except ValueError:
-            print("⚠️  Ungültige Eingabe für Eintrags-Limit. Zurück zum Hauptmenü.")
-            return "main"
-    else:
-        limit = settings.limit
+    delay_label = _format_delay_label(settings.detail_delay_range)
+    storage_label = (
+        f"SQLite → {settings.db_path}"
+        if settings.db_path
+        else f"CSV → {settings.csv_filename}"
+    )
+    detail_label = "aktiv" if settings.enable_detail_capture else "aus"
+    rate_label = settings.detail_rate_limit_permits or "aus"
+    lines = [
+        f"   • Basis-URL.........: {shorten_url(settings.base_url_template)}",
+        f"   • Suchbegriff.......: {settings.search_term or 'alle'}",
+        f"   • Tage..............: {settings.days}",
+        f"   • Limit.............: {limit_label}",
+        f"   • Detail-Erfassung..: {detail_label}",
+        f"   • Detail-Worker.....: {settings.detail_worker_count}",
+        f"   • Detail-Pause......: {delay_label}",
+        f"   • Detail-Rate-Limit.: {rate_label}",
+        f"   • Speicherung.......: {storage_label}",
+    ]
+    return "\n".join(lines)
 
-    default_detail_enabled = settings.enable_detail_capture
-    default_label = "ja" if default_detail_enabled else "nein"
-    detail_input = input(
-        f"Genaue Erfassung aktivieren? (j/N – Enter = {default_label}): "
-    ).strip().lower()
-    print()
-    if detail_input:
-        enable_detail_capture = detail_input in {"j", "ja", "y", "yes"}
-    else:
-        enable_detail_capture = default_detail_enabled
 
-    detail_delay_range = settings.detail_delay_range
-    detail_worker_count = settings.detail_worker_count or 1
-    detail_rate_limit_permits = settings.detail_rate_limit_permits
-
-    if enable_detail_capture:
-        print("🔍 Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet.")
-        print()
-        worker_input = input(
-            f"Wie viele Detailseiten sollen parallel geladen werden? (Enter = {detail_worker_count}, min 1, max 5): "
-        ).strip()
-        print()
-        if worker_input:
-            try:
-                detail_worker_count = int(worker_input)
-            except ValueError:
-                pass
-        detail_worker_count = max(1, min(5, detail_worker_count))
-
-        default_delay_label = _format_delay_label(detail_delay_range)
-        random_delay_input = input(
-            f"Detail-Pause konfigurieren (Enter = {default_delay_label}, 'auto', '0', oder Sekundenwert): "
-        ).strip().lower()
-        print()
-        if random_delay_input:
-            if random_delay_input == "auto":
-                detail_delay_range = (1.0, 2.0)
-            elif random_delay_input == "0":
-                detail_delay_range = None
-            else:
-                try:
-                    if "-" in random_delay_input:
-                        start_txt, end_txt = random_delay_input.replace(",", ".").split("-", 1)
-                        start_val = float(start_txt)
-                        end_val = float(end_txt)
-                        if start_val > end_val:
-                            start_val, end_val = end_val, start_val
-                        detail_delay_range = (start_val, end_val)
-                    else:
-                        value = float(random_delay_input.replace(",", "."))
-                        if value < 0:
-                            raise ValueError
-                        detail_delay_range = (value, value)
-                except ValueError:
-                    print("⚠️  Ungültige Eingabe – verwende vorhandenen Standard.")
-
-        rate_limit_input = input(
-            f"Optionale Ratenbegrenzung (Enter = {detail_rate_limit_permits or 'aus'}): "
-        ).strip()
-        print()
-        if rate_limit_input:
-            try:
-                permits = int(rate_limit_input)
-                if permits > 0:
-                    detail_rate_limit_permits = min(permits, detail_worker_count)
-                else:
-                    detail_rate_limit_permits = None
-            except ValueError:
-                print("⚠️  Ungültige Eingabe – lasse Ratenbegrenzung unverändert.")
-    else:
-        detail_delay_range = None
-        detail_worker_count = 1
-        detail_rate_limit_permits = None
-
-    db_path = (settings.db_path or "").strip() or None
-    csv_filename = settings.csv_filename or OUTPUT_CSV
-    print_section("💾 Speicherung")
-    if db_path:
-        print(f"   • SQLite-Datei: {db_path} (änderbar über ⚙️ Einstellungen)")
-        csv_filename = None
-    else:
-        print(f"   • CSV-Datei: {csv_filename} (änderbar über ⚙️ Einstellungen)")
-
-    config = ScraperConfig(
-        search_term=search_term,
-        days=days,
-        limit=limit,
-        enable_detail_capture=enable_detail_capture,
+def _build_config_from_settings(settings):
+    base_url = settings.base_url_template or BASE_URL_TEMPLATE or DEFAULT_BASE_URL_TEMPLATE
+    enable_detail = bool(settings.enable_detail_capture)
+    detail_delay_range = settings.detail_delay_range if enable_detail else None
+    detail_worker_count = settings.detail_worker_count if enable_detail else 1
+    detail_rate_limit_permits = (
+        settings.detail_rate_limit_permits if enable_detail else None
+    )
+    csv_filename = None if settings.db_path else (settings.csv_filename or OUTPUT_CSV)
+    return ScraperConfig(
+        search_term=settings.search_term or "",
+        days=settings.days or 1,
+        limit=settings.limit,
+        enable_detail_capture=enable_detail,
         detail_delay_range=detail_delay_range,
         detail_worker_count=detail_worker_count,
         detail_rate_limit_permits=detail_rate_limit_permits,
         csv_filename=csv_filename,
         base_url_template=base_url,
-        db_path=db_path,
+        db_path=settings.db_path,
     )
-    return run_scraper_flow_from_config(config)
 
+
+def _prompt_detail_delay(default_value):
+    default_label = _format_delay_label(default_value)
+    random_delay_input = input(
+        f"Detail-Pause konfigurieren (Enter = {default_label}, 'auto', '0', oder Sekundenwert): "
+    ).strip().lower()
+    if not random_delay_input:
+        return default_value
+    if random_delay_input == "auto":
+        return (1.0, 2.0)
+    if random_delay_input == "0":
+        return None
+    try:
+        if "-" in random_delay_input:
+            start_txt, end_txt = random_delay_input.replace(",", ".").split("-", 1)
+            start_val = float(start_txt)
+            end_val = float(end_txt)
+            if start_val > end_val:
+                start_val, end_val = end_val, start_val
+            return (start_val, end_val)
+        value = float(random_delay_input.replace(",", "."))
+        if value < 0:
+            raise ValueError
+        return (value, value)
+    except ValueError:
+        print("⚠️  Ungültige Eingabe – verwende vorhandenen Wert.")
+        return default_value
+
+
+def _prompt_temporary_overrides(settings):
+    overrides = {}
+    working_settings = settings
+    while True:
+        clear_screen()
+        print_section("📝 Aktuelle Einstellungen")
+        print(_format_settings_summary(working_settings))
+        print()
+        print("  [b] 🔗 Basis-URL")
+        print("  [s] 🔎 Suchbegriff")
+        print("  [t] ⏱️  Tage")
+        print("  [l] 📏 Limit")
+        print("  [d] 🔍 Detail-Erfassung")
+        print("  [w] 👥 Detail-Worker")
+        print("  [p] ⏳ Detail-Pause")
+        print("  [r] 🚦 Detail-Rate-Limit")
+        print("  [c] 💾 CSV-Datei")
+        print("  [x] 🗄️  SQLite-Datei")
+        print()
+        choice = input("Feld wählen ([Enter] fertig, q = Abbrechen): ").strip().lower()
+        if not choice:
+            return overrides
+        if choice in {"q", "quit"}:
+            return None
+        if choice == "b":
+            new_url = input(
+                "Neue Basis-URL mit {search_term} und {page_num} (Enter = unverändert): "
+            ).strip()
+            if new_url:
+                try:
+                    normalized = build_base_url_template(new_url)
+                    overrides["base_url_template"] = normalized
+                except ValueError as exc:
+                    print(f"⚠️  {exc}")
+                    time.sleep(1)
+        elif choice == "s":
+            overrides["search_term"] = input("Suchbegriff (leer = alle): ").strip()
+        elif choice == "t":
+            raw = input("Tage (1..n): ").strip()
+            if raw:
+                try:
+                    value = int(raw)
+                    if value <= 0:
+                        raise ValueError
+                    overrides["days"] = value
+                except ValueError:
+                    print("⚠️  Ungültige Eingabe – Tage bleiben unverändert.")
+                    time.sleep(1)
+        elif choice == "l":
+            raw = input("Limit (leer = alle): ").strip()
+            if not raw:
+                overrides["limit"] = None
+            else:
+                try:
+                    value = int(raw)
+                    if value <= 0:
+                        raise ValueError
+                    overrides["limit"] = value
+                except ValueError:
+                    print("⚠️  Ungültige Eingabe – Limit bleibt unverändert.")
+                    time.sleep(1)
+        elif choice == "d":
+            detail_input = input("Detail-Erfassung aktivieren? (j/N): ").strip().lower()
+            overrides["enable_detail_capture"] = detail_input in {"j", "ja", "y", "yes"}
+        elif choice == "w":
+            raw = input("Detail-Worker (1-5): ").strip()
+            if raw:
+                try:
+                    value = int(raw)
+                    overrides["detail_worker_count"] = max(1, min(5, value))
+                except ValueError:
+                    print("⚠️  Ungültige Eingabe – Worker bleiben unverändert.")
+                    time.sleep(1)
+        elif choice == "p":
+            overrides["detail_delay_range"] = _prompt_detail_delay(
+                working_settings.detail_delay_range
+            )
+        elif choice == "r":
+            raw = input("Rate-Limit (leer = aus): ").strip()
+            if not raw:
+                overrides["detail_rate_limit_permits"] = None
+            else:
+                try:
+                    value = int(raw)
+                    overrides["detail_rate_limit_permits"] = value if value > 0 else None
+                except ValueError:
+                    print("⚠️  Ungültige Eingabe – Rate-Limit bleibt unverändert.")
+                    time.sleep(1)
+        elif choice == "c":
+            filename = input("CSV-Dateiname (Enter = Standard): ").strip()
+            if filename:
+                overrides["csv_filename"] = filename
+        elif choice == "x":
+            db_path = input("SQLite-Datei (leer = deaktivieren): ").strip()
+            overrides["db_path"] = db_path or None
+        else:
+            print("⚠️  Unbekannte Auswahl.")
+            time.sleep(1)
+        if overrides:
+            working_settings = replace(settings, **overrides)
+
+
+def run_scraper_flow():
+    print_section("🚀 Neue Suche starten")
+    print(
+        "ℹ️  Aktuell wird nur reklama5.mk unterstützt. Die Standardwerte stammen aus dem Menü ⚙️ Einstellungen."
+    )
+    print()
+
+    settings = current_settings
+    print_section("📋 Zusammenfassung")
+    print(_format_settings_summary(settings))
+    print()
+    choice = input(
+        "[Enter] mit diesen Einstellungen starten / [e] Einzelwerte kurzfristig anpassen: "
+    ).strip().lower()
+
+    if choice == "e":
+        overrides = _prompt_temporary_overrides(settings)
+        if overrides is None:
+            print("↩️  Abbruch – zurück zum Hauptmenü.")
+            return "main"
+        if overrides:
+            settings = replace(settings, **overrides)
+            save_choice = input(
+                "Als neue Standardeinstellung speichern? (j/N): "
+            ).strip().lower()
+            if save_choice in {"j", "ja", "y", "yes"}:
+                _update_settings(**overrides)
+                settings = current_settings
+            else:
+                print("💡 Temporäre Einstellungen werden nicht gespeichert.")
+
+    config = _build_config_from_settings(settings)
+    return run_scraper_flow_from_config(config)
 
 def _positive_int(value):
     try:
