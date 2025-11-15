@@ -62,3 +62,38 @@ def test_classify_listing_status_ignores_detail_only_fields():
 
     assert listings[0]["_status"] == STATUS_UNCHANGED
     assert listings[0]["_status_changes"] == {}
+
+
+def test_classify_listing_status_keeps_numeric_details_when_missing_in_overview():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
+
+    stored_listing = build_listing(km=120_000, kw=85, ps=115)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
+
+    followup_listing = build_listing(km=None, kw=None, ps=None)
+
+    classify_listing_status([followup_listing], conn)
+
+    assert followup_listing["_status"] == STATUS_UNCHANGED
+    assert followup_listing["_status_changes"] == {}
+
+
+def test_classify_listing_status_detects_real_numeric_changes():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
+
+    stored_listing = build_listing(km=120_000, kw=85, ps=115)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
+
+    followup_listing = build_listing(km=121_000)
+
+    classify_listing_status([followup_listing], conn)
+
+    assert followup_listing["_status"] != STATUS_UNCHANGED
+    assert followup_listing["_status_changes"].get("km") == {
+        "old": 120_000,
+        "new": 121_000,
+    }

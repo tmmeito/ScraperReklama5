@@ -824,7 +824,8 @@ def classify_listing_status(listings, db_connection):
             if existing is None:
                 listing_status = STATUS_NEW
             else:
-                for detail_field in DETAIL_ONLY_FIELDS:
+                fallback_fields = list(DETAIL_ONLY_FIELDS) + ["km", "kw", "ps", "year"]
+                for detail_field in fallback_fields:
                     new_value = normalized_payload.get(detail_field)
                     if new_value in (None, ""):
                         existing_value = existing.get(detail_field)
@@ -833,6 +834,8 @@ def classify_listing_status(listings, db_connection):
                 listing_hash = sqlite_store.calculate_listing_hash(normalized_payload)
                 for field in ("price", "km", "kw", "ps"):
                     new_value = normalized_payload.get(field)
+                    if new_value in (None, ""):
+                        continue
                     old_value = existing.get(field)
                     if new_value != old_value:
                         changes[field] = {"old": old_value, "new": new_value}
