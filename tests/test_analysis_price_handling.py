@@ -72,7 +72,8 @@ def test_display_summary_counts_empty_price_as_low_price(capfd):
         },
     ]
 
-    scraper.display_make_model_summary(rows, min_price_for_avg=500, top_n=1)
+    analysis = scraper.AnalysisData(rows)
+    scraper.display_make_model_summary(analysis, min_price_for_avg=500, top_n=1)
 
     captured = capfd.readouterr().out
     assert "2 (1 / -)" in captured
