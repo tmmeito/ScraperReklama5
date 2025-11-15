@@ -18,7 +18,10 @@ pip install -r requirements.txt
 python src/scraperReklama5.py
 ```
 
-Über das Menü lassen sich neue Suchen starten oder bestehende CSV-Dateien analysieren.
+Über das Menü lassen sich neue Suchen starten oder bestehende CSV-Dateien **oder**
+eine SQLite-Datenbank analysieren. Die Analyse kann optional nach Mindestpreis,
+Tages- oder Suchfiltern gefiltert werden und zeigt – sofern vorhanden – auch
+aktuelle Preisänderungen an.
 
 ## Automatischer CLI-Modus
 
@@ -34,6 +37,7 @@ Wird das Skript mit Argumenten gestartet, greift automatisch der nicht-interakti
 | `--details-workers` | Anzahl paralleler Detail-Aufrufe (1–5, Standard 3). |
 | `--details-rate-limit` | Begrenzt die gleichzeitigen Detail-Aufrufe. |
 | `--csv` | Pfad der Zieldatei für die Rohdaten (Standard: `reklama5_autos_raw.csv`). |
+| `--db` | SQLite-Datei, in der Inserate gespeichert und ausgewertet werden. |
 | `--base-url` | Alternative Such-URL mit den Platzhaltern `{search_term}` und `{page_num}`. |
 
 ### Beispiel
@@ -47,8 +51,8 @@ python src/scraperReklama5.py \
     --csv data/aygo.csv
 ```
 
-Der Lauf speichert die Ergebnisse in `data/aygo.csv` und beendet sich anschließend automatisch. Eine Zusammenfassung
-wird direkt ausgegeben.
+Der Lauf speichert die Ergebnisse in `data/aygo.csv` (alternativ via `--db data/reklama5.db` in eine SQLite-Datenbank)
+und beendet sich anschließend automatisch. Eine Zusammenfassung sowie die JSON-Aggregation werden direkt ausgegeben.
 
 ## Tests
 
