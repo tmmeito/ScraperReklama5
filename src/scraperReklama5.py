@@ -26,15 +26,6 @@ from storage import sqlite_store
 from bs4 import BeautifulSoup
 
 try:
-    import requests
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry
-except Exception:  # pragma: no cover - optional dependency for network robustness
-    requests = None
-    HTTPAdapter = None
-    Retry = None
-
-try:
     from urllib3.exceptions import NotOpenSSLWarning
     warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
 except Exception:
@@ -44,8 +35,6 @@ DEFAULT_BASE_URL_TEMPLATE = "https://www.reklama5.mk/Search?city=&cat=24&q={sear
 BASE_URL_TEMPLATE = DEFAULT_BASE_URL_TEMPLATE
 OUTPUT_CSV        = "reklama5_autos_raw.csv"
 OUTPUT_AGG        = "reklama5_autos_agg.json"
-
-_HTTP_SESSION = None
 
 CSV_FIELDNAMES = [
     "id", "link", "make", "model", "year", "price", "km", "kw", "ps",
@@ -616,55 +605,19 @@ def build_base_url_template(raw_input):
     new_query = _rebuild_query_string(query_pairs)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
-def _get_http_session():
-    global _HTTP_SESSION
-    if requests is None or HTTPAdapter is None or Retry is None:
-        return None
-    if _HTTP_SESSION is None:
-        session = requests.Session()
-        retry = Retry(
-            total=3,
-            connect=3,
-            read=3,
-            backoff_factor=1,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=("GET", "HEAD"),
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        _HTTP_SESSION = session
-    return _HTTP_SESSION
-
-def _is_network_exception(exc):
-    if isinstance(exc, (socket.timeout, urllib_error.URLError)):
-        return True
-    if requests is not None and isinstance(exc, requests.RequestException):
-        return True
-    return False
-
 def fetch_listing_page(search_term, page_num, retries=3, backoff_seconds=2):
     encoded_term = quote_plus(search_term or "")
     url = BASE_URL_TEMPLATE.format(search_term=encoded_term, page_num=page_num)
     headers = {"User-Agent": "Mozilla/5.0 (compatible; reklama5-scraper/1.0)"}
-    session = _get_http_session()
     req = urllib_request.Request(url, headers=headers)
 
     for attempt in range(1, retries + 1):
         try:
-            if session is not None:
-                response = session.get(url, headers=headers, timeout=(10, 20))
-                response.raise_for_status()
-                if not response.encoding:
-                    response.encoding = "utf-8"
-                return response.text
             with urllib_request.urlopen(req, timeout=20) as response:
                 html_bytes = response.read()
                 charset = response.headers.get_content_charset() or "utf-8"
             return html_bytes.decode(charset, errors="replace")
-        except Exception as exc:
-            if not _is_network_exception(exc):
-                raise
+        except (urllib_error.URLError, socket.timeout) as exc:
             print(
                 "⚠️  Ergebnisseite konnte nicht geladen werden | "
                 f"{shorten_url(url)} (Versuch {attempt}/{retries}: {exc})"
@@ -1041,22 +994,14 @@ def fetch_detail_attributes(url, retries=3, backoff_seconds=2):
         return {}
 
     headers = {"User-Agent": "Mozilla/5.0 (compatible; reklama5-scraper/1.0)"}
-    session = _get_http_session()
     req = urllib_request.Request(url, headers=headers)
 
     for attempt in range(1, retries + 1):
         try:
-            if session is not None:
-                response = session.get(url, headers=headers, timeout=(10, 25))
-                response.raise_for_status()
-                html = response.content
-            else:
-                with urllib_request.urlopen(req, timeout=25) as response:
-                    html = response.read()
+            with urllib_request.urlopen(req, timeout=15) as response:
+                html = response.read()
             break
-        except Exception as exc:
-            if not _is_network_exception(exc):
-                raise
+        except (urllib_error.URLError, socket.timeout) as exc:
             print(
                 "⚠️  Detailseite konnte nicht geladen werden | "
                 f"{shorten_url(url)} (Versuch {attempt}/{retries}: {exc})"
