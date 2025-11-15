@@ -1,5 +1,7 @@
 # scraper_reklama5_with_km_kw_ps.py
 
+import argparse
+import sys
 import time
 import random
 import re
@@ -9,10 +11,12 @@ import json
 import warnings
 import socket
 import threading
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from datetime import datetime, timedelta
 from collections import defaultdict
+from typing import Optional, Tuple
 from urllib import request as urllib_request
 from urllib import error as urllib_error
 from urllib.parse import urlsplit, urlunsplit, quote_plus
@@ -58,6 +62,19 @@ MK_MONTHS = {
     "мај":5, "јун":6, "јул":7, "авг":8,
     "сеп":9, "окт":10, "ное":11, "дек":12
 }
+
+
+@dataclass
+class ScraperConfig:
+    search_term: str = ""
+    days: int = 1
+    limit: Optional[int] = None
+    enable_detail_capture: bool = False
+    detail_delay_range: Optional[Tuple[float, float]] = None
+    detail_worker_count: int = 1
+    detail_rate_limit_permits: Optional[int] = None
+    csv_filename: str = OUTPUT_CSV
+    base_url_template: Optional[str] = None
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -615,10 +632,10 @@ def is_older_than_days(date_text, days, promoted):
         return False
     return dt < datetime.now() - timedelta(days=days)
 
-def save_raw_filtered(rows, days, limit=None):
-    file_exists = os.path.isfile(OUTPUT_CSV)
+def save_raw_filtered(rows, days, limit=None, csv_filename=OUTPUT_CSV):
+    file_exists = os.path.isfile(csv_filename)
     saved = 0
-    with open(OUTPUT_CSV, mode="a", newline="", encoding="utf-8") as f:
+    with open(csv_filename, mode="a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
         if not file_exists:
             writer.writeheader()
@@ -951,6 +968,156 @@ def analysis_menu(csv_filename=OUTPUT_CSV):
         else:
             print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
 
+
+def run_scraper_flow_from_config(config, *, interactive=True):
+    if not isinstance(config, ScraperConfig):
+        config = ScraperConfig(**config)
+
+    global BASE_URL_TEMPLATE
+    if config.base_url_template:
+        BASE_URL_TEMPLATE = config.base_url_template
+
+    csv_filename = config.csv_filename or OUTPUT_CSV
+    search_term = config.search_term or ""
+    try:
+        days_value = int(config.days)
+    except (TypeError, ValueError):
+        days_value = 1
+    days = days_value if days_value > 0 else 1
+
+    limit = None
+    if config.limit is not None:
+        try:
+            limit_candidate = int(config.limit)
+        except (TypeError, ValueError):
+            limit_candidate = None
+        else:
+            if limit_candidate > 0:
+                limit = limit_candidate
+    enable_detail_capture = bool(config.enable_detail_capture)
+
+    detail_worker_count = config.detail_worker_count or 1
+    detail_worker_count = max(1, min(5, int(detail_worker_count)))
+
+    detail_rate_limit_permits = config.detail_rate_limit_permits
+    if detail_rate_limit_permits is not None:
+        detail_rate_limit_permits = int(detail_rate_limit_permits)
+        if detail_rate_limit_permits <= 0:
+            detail_rate_limit_permits = None
+        else:
+            detail_rate_limit_permits = min(detail_rate_limit_permits, detail_worker_count)
+
+    detail_delay_range = config.detail_delay_range
+    if enable_detail_capture:
+        if detail_delay_range is None:
+            detail_delay_range = (1.0, 2.0)
+        elif detail_delay_range[0] > detail_delay_range[1]:
+            detail_delay_range = (detail_delay_range[1], detail_delay_range[0])
+    else:
+        detail_delay_range = None
+        detail_worker_count = 1
+        detail_rate_limit_permits = None
+
+    if os.path.isfile(csv_filename):
+        os.remove(csv_filename)
+
+    total_found = 0
+    total_saved = 0
+
+    for page in range(1, 200):
+        html = fetch_listing_page(search_term, page)
+        if not html:
+            print()
+            print(f"⚠️  Seite {page} konnte nicht geladen werden. Stop.")
+            break
+        listings = parse_listing(html)
+
+        if not listings:
+            print()
+            print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
+            break
+
+        eligible_listings = [
+            item for item in listings
+            if item["date"] and is_within_days(item["date"], days, item["promoted"])
+        ]
+
+        remaining_limit = None
+        if limit is not None:
+            remaining_limit = max(0, limit - total_saved)
+            if remaining_limit == 0:
+                print(f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
+                break
+            eligible_listings = eligible_listings[:remaining_limit]
+
+        found_on_page = len(eligible_listings)
+        total_found += found_on_page
+
+        print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
+        print(INLINE_PROGRESS_SYMBOL * found_on_page)
+
+        progress_callback = None
+        progress_finalize = None
+        if enable_detail_capture and found_on_page:
+            progress_callback, progress_finalize = build_inline_progress_printer(found_on_page)
+
+        enrich_listings_with_details(
+            eligible_listings,
+            enable_detail_capture,
+            delay_range=detail_delay_range,
+            max_items=remaining_limit if limit is not None else None,
+            progress_callback=progress_callback,
+            max_workers=detail_worker_count,
+            rate_limit_permits=detail_rate_limit_permits,
+        )
+
+        if progress_finalize:
+            progress_finalize()
+
+        saved_in_page = save_raw_filtered(
+            eligible_listings,
+            days,
+            limit=remaining_limit,
+            csv_filename=csv_filename,
+        )
+        total_saved += saved_in_page
+        print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
+        print()
+
+        if limit is not None and total_saved >= limit:
+            print(f"ℹ️  Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
+            break
+
+        stop = False
+        for item in listings:
+            if item["date"] and is_older_than_days(item["date"], days, item["promoted"]):
+                print(
+                    f"ℹ️  Anzeige älter als {days} Tage gefunden "
+                    f"(ID {item['id']}) auf Seite {page}. Stop."
+                )
+                stop = True
+                break
+        if stop:
+            break
+
+        sleep_time = random.uniform(2, 4)
+        time.sleep(sleep_time)
+
+    print_section("📦 Zusammenfassung")
+    print(
+        f"   • Geprüfte Einträge : {total_found}\n"
+        f"   • Gespeicherte Einträge: {total_saved}\n"
+    )
+
+    aggregate_data(csv_filename=csv_filename)
+    if interactive:
+        return analysis_menu(csv_filename)
+    return {
+        "total_found": total_found,
+        "total_saved": total_saved,
+        "csv_filename": csv_filename,
+    }
+
 def run_scraper_flow():
     print_section("🚀 Neue Suche starten")
     print("  [1] reklama5.mk")
@@ -1067,97 +1234,148 @@ def run_scraper_flow():
             except ValueError:
                 detail_rate_limit_permits = None
 
-    if os.path.isfile(OUTPUT_CSV):
-        os.remove(OUTPUT_CSV)
-
-    total_found   = 0
-    total_saved   = 0
-
-    for page in range(1, 200):
-        html = fetch_listing_page(search_term, page)
-        if not html:
-            print()
-            print(f"⚠️  Seite {page} konnte nicht geladen werden. Stop.")
-            break
-        listings = parse_listing(html)
-
-        if not listings:
-            print()
-            print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
-            break
-
-        eligible_listings = [
-            item for item in listings
-            if item["date"] and is_within_days(item["date"], days, item["promoted"])
-        ]
-
-        remaining_limit = None
-        if limit is not None:
-            remaining_limit = max(0, limit - total_saved)
-            if remaining_limit == 0:
-                print(f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
-                break
-            eligible_listings = eligible_listings[:remaining_limit]
-
-        found_on_page = len(eligible_listings)
-        total_found  += found_on_page
-
-        print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
-        print(INLINE_PROGRESS_SYMBOL * found_on_page)
-
-        progress_callback = None
-        progress_finalize = None
-        if enable_detail_capture and found_on_page:
-            progress_callback, progress_finalize = build_inline_progress_printer(found_on_page)
-
-        enrich_listings_with_details(
-            eligible_listings,
-            enable_detail_capture,
-            delay_range=detail_delay_range,
-            max_items=remaining_limit if limit is not None else None,
-            progress_callback=progress_callback,
-            max_workers=detail_worker_count,
-            rate_limit_permits=detail_rate_limit_permits,
-        )
-
-        if progress_finalize:
-            progress_finalize()
-
-        saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
-        total_saved   += saved_in_page
-        print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
-        print()
-
-        if limit is not None and total_saved >= limit:
-            print(f"ℹ️  Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
-            break
-
-        stop = False
-        for item in listings:
-            if item["date"] and is_older_than_days(item["date"], days, item["promoted"]):
-                print(
-                    f"ℹ️  Anzeige älter als {days} Tage gefunden "
-                    f"(ID {item['id']}) auf Seite {page}. Stop."
-                )
-                stop = True
-                break
-        if stop:
-            break
-
-        sleep_time = random.uniform(2,4)
-        time.sleep(sleep_time)
-
-    print_section("📦 Zusammenfassung")
-    print(
-        f"   • Geprüfte Einträge : {total_found}\n"
-        f"   • Gespeicherte Einträge: {total_saved}\n"
+    config = ScraperConfig(
+        search_term=search_term,
+        days=days,
+        limit=limit,
+        enable_detail_capture=enable_detail_capture,
+        detail_delay_range=detail_delay_range,
+        detail_worker_count=detail_worker_count,
+        detail_rate_limit_permits=detail_rate_limit_permits,
+        csv_filename=OUTPUT_CSV,
+        base_url_template=BASE_URL_TEMPLATE,
     )
-
-    aggregate_data()
-    return analysis_menu(OUTPUT_CSV)
+    return run_scraper_flow_from_config(config)
 
 
-def main():
+def _positive_int(value):
+    try:
+        ivalue = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Bitte eine ganze Zahl angeben.") from exc
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError("Wert muss größer als 0 sein.")
+    return ivalue
+
+
+def _non_negative_float(value):
+    text = str(value).strip().replace(",", ".")
+    try:
+        fvalue = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Bitte eine Zahl verwenden.") from exc
+    if fvalue < 0:
+        raise argparse.ArgumentTypeError("Wert darf nicht negativ sein.")
+    return fvalue
+
+
+def build_cli_parser():
+    parser = argparse.ArgumentParser(
+        description="Nicht-interaktive Ausführung des reklama5-Scrapers",
+        add_help=True,
+    )
+    parser.add_argument("--search", help="Suchbegriff", default="")
+    parser.add_argument(
+        "--days",
+        type=_positive_int,
+        default=1,
+        help="Anzahl der Tage, die berücksichtigt werden (Standard: 1)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="Maximale Anzahl an Einträgen (optional)",
+    )
+    parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Genaue Erfassung der einzelnen Inserate aktivieren",
+    )
+    parser.add_argument(
+        "--details-workers",
+        type=_positive_int,
+        default=3,
+        help="Parallele Detailabrufe (Standard: 3, min 1, max 5)",
+    )
+    parser.add_argument(
+        "--details-delay",
+        type=_non_negative_float,
+        default=None,
+        help="Feste Pause zwischen Detailseiten in Sekunden",
+    )
+    parser.add_argument(
+        "--details-rate-limit",
+        type=_positive_int,
+        default=None,
+        help="Maximale gleichzeitige Detailabrufe",
+    )
+    parser.add_argument(
+        "--csv",
+        dest="csv_filename",
+        help="Zieldatei für die exportierten Rohdaten",
+    )
+    parser.add_argument(
+        "--base-url",
+        dest="base_url",
+        help="Eigene Such-URL mit Platzhaltern {search_term} und {page_num}",
+    )
+    return parser
+
+
+def run_cli_from_args(args):
+    csv_filename = args.csv_filename or OUTPUT_CSV
+
+    detail_delay_range = None
+    detail_worker_count = args.details_workers or 3
+    detail_rate_limit = args.details_rate_limit
+
+    if args.details:
+        if args.details_delay is not None and args.details_delay > 0:
+            detail_delay_range = (args.details_delay, args.details_delay)
+        elif args.details_delay == 0:
+            detail_delay_range = None
+        else:
+            detail_delay_range = (1.0, 2.0)
+        detail_worker_count = max(1, min(5, detail_worker_count))
+        if detail_rate_limit is not None:
+            detail_rate_limit = min(detail_rate_limit, detail_worker_count)
+    else:
+        detail_rate_limit = None
+        detail_delay_range = None
+        detail_worker_count = 1
+
+    base_url_template = BASE_URL_TEMPLATE
+    if args.base_url:
+        base_url_template = build_base_url_template(args.base_url)
+
+    config = ScraperConfig(
+        search_term=args.search or "",
+        days=args.days,
+        limit=args.limit,
+        enable_detail_capture=args.details,
+        detail_delay_range=detail_delay_range,
+        detail_worker_count=detail_worker_count,
+        detail_rate_limit_permits=detail_rate_limit,
+        csv_filename=csv_filename,
+        base_url_template=base_url_template,
+    )
+    result = run_scraper_flow_from_config(config, interactive=False)
+    print_section("✅ Automatischer Lauf abgeschlossen")
+    print(
+        f"   • CSV-Datei: {result['csv_filename']}\n"
+        f"   • Gespeicherte Einträge: {result['total_saved']}"
+    )
+    return result
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv:
+        parser = build_cli_parser()
+        args = parser.parse_args(argv)
+        return run_cli_from_args(args)
     while True:
         clear_screen()
         print_banner("SCRAPER FÜR reklama5.mk AUTOMOBILE")
