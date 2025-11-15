@@ -72,3 +72,43 @@ def test_run_scraper_filters_duplicate_ids(monkeypatch, tmp_path):
         ids = [row["id"] for row in reader]
 
     assert ids == ["1", "2", "3"]
+
+
+def test_run_scraper_pre_filtered_saves_skip_extra_filter(monkeypatch, tmp_path):
+    csv_path = tmp_path / "cars.csv"
+    html_pages = {1: "page-1"}
+
+    def fake_fetch(search_term, page_num, retries=3, backoff_seconds=2):
+        return html_pages.get(page_num)
+
+    listings_by_html = {
+        "page-1": [_make_listing("1"), _make_listing("2")],
+    }
+
+    def fake_parse(html):
+        return listings_by_html.get(html, [])
+
+    call_counter = {"count": 0}
+
+    def counting_is_within_days(*args, **kwargs):
+        call_counter["count"] += 1
+        return True
+
+    monkeypatch.setattr(scraper, "fetch_listing_page", fake_fetch)
+    monkeypatch.setattr(scraper, "parse_listing", fake_parse)
+    monkeypatch.setattr(scraper, "is_within_days", counting_is_within_days)
+    monkeypatch.setattr(scraper, "is_older_than_days", lambda *_, **__: False)
+    monkeypatch.setattr(scraper, "enrich_listings_with_details", lambda *_, **__: None)
+    monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(scraper, "aggregate_data", lambda **_: {})
+
+    config = scraper.ScraperConfig(
+        search_term="test",
+        days=5,
+        enable_detail_capture=False,
+        csv_filename=str(csv_path),
+    )
+
+    scraper.run_scraper_flow_from_config(config, interactive=False)
+
+    assert call_counter["count"] == len(listings_by_html["page-1"])

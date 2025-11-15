@@ -36,11 +36,12 @@ def test_cli_entry_triggers_non_interactive_run(monkeypatch, tmp_path):
 
     saved = {}
 
-    def fake_save(rows, days, limit=None, csv_filename=None):
+    def fake_save(rows, days, limit=None, csv_filename=None, pre_filtered=False):
         saved["rows"] = rows
         saved["days"] = days
         saved["limit"] = limit
         saved["csv"] = csv_filename
+        saved["pre_filtered"] = pre_filtered
         return len(rows)
 
     monkeypatch.setattr(scraper, "save_raw_filtered", fake_save)
@@ -116,11 +117,12 @@ def test_cli_details_delay_zero_propagates_none(monkeypatch, tmp_path):
 
     saved = {}
 
-    def fake_save(rows, days, limit=None, csv_filename=None):
+    def fake_save(rows, days, limit=None, csv_filename=None, pre_filtered=False):
         saved["rows"] = rows
         saved["days"] = days
         saved["limit"] = limit
         saved["csv"] = csv_filename
+        saved["pre_filtered"] = pre_filtered
         return len(rows)
 
     monkeypatch.setattr(scraper, "save_raw_filtered", fake_save)
