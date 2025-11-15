@@ -42,8 +42,6 @@ CSV_FIELDNAMES = [
     "emission_class", "date", "city", "promoted"
 ]
 
-DB_FIELDNAMES = [name for name in CSV_FIELDNAMES if name != "promoted"]
-
 DETAIL_ONLY_FIELDS = [
     "fuel",
     "gearbox",
@@ -60,9 +58,13 @@ DETAIL_ONLY_FIELDS = [
 # a detail fetch is necessary.
 OVERVIEW_COMPARISON_FIELDS = [
     "link",
+    "year",
     "price",
     "km",
+    "kw",
+    "ps",
     "date",
+    "city",
 ]
 
 STATUS_COMPARISON_FIELDS = list(OVERVIEW_COMPARISON_FIELDS)
@@ -1208,7 +1210,7 @@ def save_raw_filtered(
     ]
 
     if db_connection is not None:
-        sqlite_store.upsert_many(db_connection, sanitized_rows, DB_FIELDNAMES)
+        sqlite_store.upsert_many(db_connection, sanitized_rows, CSV_FIELDNAMES)
         return len(saved_rows)
 
     target_csv = csv_filename or OUTPUT_CSV
@@ -1589,7 +1591,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
     if db_path:
         try:
             db_connection = sqlite_store.open_database(db_path)
-            sqlite_store.init_schema(db_connection, DB_FIELDNAMES)
+            sqlite_store.init_schema(db_connection, CSV_FIELDNAMES)
         except Exception as exc:
             print("⚠️  SQLite konnte nicht initialisiert werden. Nutze CSV-Datei.")
             print(f"    Grund: {exc}")
