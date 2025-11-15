@@ -52,6 +52,13 @@ DETAIL_ONLY_FIELDS = [
     "emission_class",
 ]
 
+# ``date`` values depend on relative labels ("денес", "вчера", …) and can change
+# between runs without any actual content update. We therefore omit it from the
+# comparison fields that control the change detection.
+STATUS_COMPARISON_FIELDS = [
+    name for name in CSV_FIELDNAMES if name not in {"id", "date"}
+]
+
 INLINE_PROGRESS_SYMBOL = "•"
 
 STATUS_NEW = "new"
@@ -831,19 +838,21 @@ def classify_listing_status(listings, db_connection):
                         existing_value = existing.get(detail_field)
                         if existing_value not in (None, ""):
                             normalized_payload[detail_field] = existing_value
+
                 listing_hash = sqlite_store.calculate_listing_hash(normalized_payload)
-                for field in ("price", "km", "kw", "ps"):
+                existing_hash = existing.get("hash")
+
+                for field in STATUS_COMPARISON_FIELDS:
                     new_value = normalized_payload.get(field)
                     if new_value in (None, ""):
                         continue
                     old_value = existing.get(field)
-                    if new_value != old_value:
+                    if old_value != new_value:
                         changes[field] = {"old": old_value, "new": new_value}
-                if existing.get("hash") != listing_hash:
-                    changes["hash"] = {
-                        "old": existing.get("hash"),
-                        "new": listing_hash,
-                    }
+
+                if changes and existing_hash != listing_hash:
+                    changes["hash"] = {"old": existing_hash, "new": listing_hash}
+
                 listing_status = STATUS_CHANGED if changes else STATUS_UNCHANGED
         listing["_status"] = listing_status
         listing["_status_changes"] = changes
