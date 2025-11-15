@@ -847,8 +847,11 @@ def display_recent_price_changes(conn, limit=5):
         )
 
 
+DEFAULT_MIN_PRICE_FOR_AVG = 500
+
+
 def display_avg_price_by_model_year(
-    analysis_data, min_listings=1, min_price_for_avg=500
+    analysis_data, min_listings=1, min_price_for_avg=DEFAULT_MIN_PRICE_FOR_AVG
 ):
     groups = _resolve_grouped_stats(analysis_data, "model_year_stats", min_price_for_avg)
     if not groups:
@@ -883,9 +886,9 @@ def display_avg_price_by_model_year(
         )
 
 
-def prompt_min_price(current_value=500):
+def prompt_min_price(current_value=DEFAULT_MIN_PRICE_FOR_AVG):
     if current_value is None or current_value < 0:
-        current_value = 500
+        current_value = DEFAULT_MIN_PRICE_FOR_AVG
     while True:
         user_input = input(
             f"Mindestpreis für Durchschnittsberechnung (Enter = {current_value}): "
@@ -926,6 +929,39 @@ def _prompt_search_filter(current_value=None):
     return user_input or None
 
 
+def _analysis_settings_menu(
+    *,
+    min_price_for_avg,
+    db_days_filter,
+    db_search_filter,
+):
+    while True:
+        label_days = db_days_filter if db_days_filter is not None else "alle"
+        label_search = db_search_filter if db_search_filter else "-"
+        print_section("⚙️  Analyse-Einstellungen")
+        print(f"   • Mindestpreis..: {min_price_for_avg} €")
+        print(f"   • Filter Tage...: {label_days}")
+        print(f"   • Filter Suche..: {label_search}")
+        print()
+        print("  [1] 💶 Mindestpreis setzen")
+        print("  [2] ⏱️  Tagesfilter ändern")
+        print("  [3] 🔎 Suchfilter ändern")
+        print()
+        print("  [0] ↩️  Zurück zum Analyse-Menü")
+        print()
+        choice = input("Deine Auswahl: ").strip()
+        if choice == "1":
+            min_price_for_avg = prompt_min_price(min_price_for_avg)
+        elif choice == "2":
+            db_days_filter = _prompt_days_filter(db_days_filter)
+        elif choice == "3":
+            db_search_filter = _prompt_search_filter(db_search_filter)
+        elif choice == "0":
+            return min_price_for_avg, db_days_filter, db_search_filter
+        else:
+            print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
+
+
 def analysis_menu(*, db_path):
     if not db_path:
         print("⚠️  Für Analysen muss eine SQLite-Datenbank angegeben werden.")
@@ -940,7 +976,7 @@ def analysis_menu(*, db_path):
         print(f"⚠️  Konnte Datenbank nicht öffnen: {exc}")
         return "exit"
 
-    min_price_for_avg = prompt_min_price(500)
+    min_price_for_avg = DEFAULT_MIN_PRICE_FOR_AVG
     db_days_filter = None
     db_search_filter = None
     try:
@@ -954,9 +990,7 @@ def analysis_menu(*, db_path):
             print(f"   • Mindestpreis..: {min_price_for_avg} €")
             print("\n  [1] 📈 Häufigste Automarken und Modelle")
             print("  [2] 💶 Durchschnittspreise pro Modell/Baujahr")
-            print("  [3] 🎯 Mindestpreis anpassen")
-            print("  [5] ⏱️  Tagesfilter ändern")
-            print("  [6] 🔎 Suchfilter ändern")
+            print("  [3] ⚙️  Einstellungen")
             print("  [4] ↩️  Analyse beenden")
             print()
             print("  [0] 🔁 Zurück zum Hauptmenü")
@@ -987,11 +1021,15 @@ def analysis_menu(*, db_path):
                 )
                 display_recent_price_changes(conn)
             elif choice == "3":
-                min_price_for_avg = prompt_min_price(min_price_for_avg)
-            elif choice == "5":
-                db_days_filter = _prompt_days_filter(db_days_filter)
-            elif choice == "6":
-                db_search_filter = _prompt_search_filter(db_search_filter)
+                (
+                    min_price_for_avg,
+                    db_days_filter,
+                    db_search_filter,
+                ) = _analysis_settings_menu(
+                    min_price_for_avg=min_price_for_avg,
+                    db_days_filter=db_days_filter,
+                    db_search_filter=db_search_filter,
+                )
             elif choice == "0":
                 return "main"
             elif choice == "4":
