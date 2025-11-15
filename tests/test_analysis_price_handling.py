@@ -6,6 +6,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 import scraperReklama5 as scraper
+from storage import sqlite_store
 
 
 def _write_csv(path, rows):
@@ -54,6 +55,52 @@ def test_aggregate_data_ignores_empty_price_entries(tmp_path, monkeypatch):
     assert entry["count_total"] == 2
     assert entry["count_with_price"] == 1
     assert entry["avg_price"] == 2000.0
+
+
+def test_aggregate_data_from_db_respects_filters(tmp_path):
+    db_path = tmp_path / "cars.db"
+    conn = sqlite_store.open_database(str(db_path))
+    sqlite_store.init_schema(conn, scraper.CSV_FIELDNAMES)
+    sqlite_store.upsert_many(
+        conn,
+        [
+            {
+                "id": "1",
+                "link": "http://example.com/1",
+                "make": "VW",
+                "model": "Golf",
+                "fuel": "Diesel",
+                "price": 15000,
+                "year": 2020,
+                "date": "01 јан 12:00",
+                "city": "Skopje",
+                "promoted": 0,
+            },
+            {
+                "id": "2",
+                "link": "http://example.com/2",
+                "make": "Toyota",
+                "model": "Aygo",
+                "fuel": "Benzin",
+                "price": 7000,
+                "year": 2019,
+                "date": "01 јан 12:00",
+                "city": "Skopje",
+                "promoted": 0,
+            },
+        ],
+        scraper.CSV_FIELDNAMES,
+    )
+    agg_path = tmp_path / "agg.json"
+
+    result = scraper.aggregate_data(
+        db_connection=conn,
+        output_json=str(agg_path),
+        search_term="aygo",
+    )
+
+    assert "Toyota Aygo" in result
+    assert "VW Golf" not in result
 
 
 def test_display_summary_counts_empty_price_as_low_price(capfd):

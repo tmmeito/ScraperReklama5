@@ -240,3 +240,164 @@ def count_listings(conn: sqlite3.Connection) -> int:
     row = cursor.fetchone()
     return int(row[0]) if row else 0
 
+
+def _build_filter_conditions(*, days: Optional[int] = None, search: Optional[str] = None):
+    clauses = []
+    params = []
+    if days is not None and days > 0:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        clauses.append("datetime(last_seen) >= datetime(?)")
+        params.append(cutoff.isoformat(timespec="seconds"))
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        clauses.append(
+            "("  #
+            "LOWER(COALESCE(make, '')) LIKE ? OR "
+            "LOWER(COALESCE(model, '')) LIKE ? OR "
+            "LOWER(COALESCE(fuel, '')) LIKE ?"
+            ")"
+        )
+        params.extend([pattern, pattern, pattern])
+    if clauses:
+        return " WHERE " + " AND ".join(clauses), params
+    return "", params
+
+
+def _normalized_expr(column: str) -> str:
+    return f"COALESCE(NULLIF(TRIM({column}), ''), 'Unbekannt')"
+
+
+def fetch_make_model_stats(
+    conn: sqlite3.Connection,
+    *,
+    min_price: int = 0,
+    days: Optional[int] = None,
+    search: Optional[str] = None,
+):
+    """Aggregate make/model statistics using SQL directly."""
+
+    min_price = max(0, int(min_price or 0))
+    where_clause, filter_params = _build_filter_conditions(days=days, search=search)
+    make_expr = _normalized_expr("make")
+    model_expr = _normalized_expr("model")
+    fuel_expr = _normalized_expr("fuel")
+    sql = f"""
+        SELECT
+            {make_expr} AS make,
+            {model_expr} AS model,
+            {fuel_expr} AS fuel,
+            COUNT(*) AS count_total,
+            SUM(CASE WHEN price IS NOT NULL AND price >= ? THEN 1 ELSE 0 END) AS count_for_avg,
+            SUM(CASE WHEN price IS NOT NULL AND price >= ? THEN price ELSE 0 END) AS sum_price,
+            SUM(CASE WHEN price IS NOT NULL AND price < ? THEN 1 ELSE 0 END) AS excluded_low_price
+        FROM listings
+        {where_clause}
+        GROUP BY make, model, fuel
+    """
+    params = [min_price, min_price, min_price] + filter_params
+    rows = conn.execute(sql, params).fetchall()
+    stats = {}
+    for row in rows:
+        key = (row["make"], row["model"], row["fuel"])
+        stats[key] = {
+            "count_total": int(row["count_total"]),
+            "count_for_avg": int(row["count_for_avg"] or 0),
+            "sum": row["sum_price"] or 0,
+            "excluded_low_price": int(row["excluded_low_price"] or 0),
+        }
+    return stats
+
+
+def fetch_model_year_stats(
+    conn: sqlite3.Connection,
+    *,
+    min_price: int = 0,
+    days: Optional[int] = None,
+    search: Optional[str] = None,
+):
+    """Aggregate per model/year statistics using SQL directly."""
+
+    min_price = max(0, int(min_price or 0))
+    clauses = ["price IS NOT NULL", "year IS NOT NULL"]
+    params = []
+    if days is not None and days > 0:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        clauses.append("datetime(last_seen) >= datetime(?)")
+        params.append(cutoff.isoformat(timespec="seconds"))
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        clauses.append(
+            "("  #
+            "LOWER(COALESCE(make, '')) LIKE ? OR "
+            "LOWER(COALESCE(model, '')) LIKE ? OR "
+            "LOWER(COALESCE(fuel, '')) LIKE ?"
+            ")"
+        )
+        params.extend([pattern, pattern, pattern])
+    where_clause = " WHERE " + " AND ".join(clauses) if clauses else ""
+    make_expr = _normalized_expr("make")
+    model_expr = _normalized_expr("model")
+    fuel_expr = _normalized_expr("fuel")
+    sql = f"""
+        SELECT
+            {make_expr} AS make,
+            {model_expr} AS model,
+            {fuel_expr} AS fuel,
+            year,
+            COUNT(*) AS count_total,
+            SUM(CASE WHEN price >= ? THEN 1 ELSE 0 END) AS count_for_avg,
+            SUM(CASE WHEN price >= ? THEN price ELSE 0 END) AS sum_price,
+            SUM(CASE WHEN price < ? THEN 1 ELSE 0 END) AS excluded_low_price
+        FROM listings
+        {where_clause}
+        GROUP BY make, model, fuel, year
+    """
+    sql_params = [min_price, min_price, min_price] + params
+    rows = conn.execute(sql, sql_params).fetchall()
+    stats = {}
+    for row in rows:
+        key = (row["make"], row["model"], row["fuel"], row["year"])
+        stats[key] = {
+            "count_total": int(row["count_total"]),
+            "count_for_avg": int(row["count_for_avg"] or 0),
+            "sum": row["sum_price"] or 0,
+            "excluded_low_price": int(row["excluded_low_price"] or 0),
+        }
+    return stats
+
+
+def _parse_change_value(value):
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+
+
+def fetch_recent_price_changes(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 5,
+):
+    sql = """
+        SELECT listing_id, old_value, new_value, changed_at
+        FROM listing_changes
+        WHERE field = 'price'
+        ORDER BY datetime(changed_at) DESC
+        LIMIT ?
+    """
+    rows = conn.execute(sql, (limit,)).fetchall()
+    return [
+        {
+            "listing_id": row["listing_id"],
+            "old_price": _parse_change_value(row["old_value"]),
+            "new_price": _parse_change_value(row["new_value"]),
+            "changed_at": row["changed_at"],
+        }
+        for row in rows
+    ]
+

@@ -1,6 +1,6 @@
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -118,3 +118,98 @@ def test_upsert_many_skips_null_overwrites_and_keeps_updated_at():
 
     change_rows = conn.execute("SELECT COUNT(*) FROM listing_changes").fetchone()[0]
     assert change_rows == 0
+
+
+def test_fetch_make_model_stats_respects_filters(monkeypatch):
+    conn = make_connection()
+    now = datetime(2024, 1, 10, 12, 0, 0)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def utcnow(cls):
+            return now
+
+    monkeypatch.setattr(sqlite_store, "datetime", FixedDateTime)
+
+    recent = now - timedelta(days=1)
+    older = now - timedelta(days=9)
+
+    sqlite_store.upsert_many(
+        conn,
+        [
+            base_listing({"id": "a", "make": "VW", "model": "Golf", "price": 15000}),
+            base_listing({"id": "b", "make": "VW", "model": "Golf", "price": 800}),
+            base_listing({"id": "c", "make": "Toyota", "model": "Aygo", "price": 6500}),
+        ],
+        scraper.CSV_FIELDNAMES,
+        timestamp=recent,
+    )
+    sqlite_store.upsert_many(
+        conn,
+        [base_listing({"id": "d", "make": "VW", "model": "Polo", "price": 4000})],
+        scraper.CSV_FIELDNAMES,
+        timestamp=older,
+    )
+
+    stats = sqlite_store.fetch_make_model_stats(
+        conn,
+        min_price=1000,
+        days=5,
+        search="golf",
+    )
+
+    assert ("VW", "Golf", "Diesel") in stats
+    golf_stats = stats[("VW", "Golf", "Diesel")]
+    assert golf_stats["count_total"] == 2
+    assert golf_stats["count_for_avg"] == 1
+    assert golf_stats["sum"] == 15000
+    assert ("VW", "Polo", "Diesel") not in stats
+
+
+def test_fetch_model_year_stats_ignores_missing_years(monkeypatch):
+    conn = make_connection()
+    now = datetime(2024, 1, 5, 10, 0, 0)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def utcnow(cls):
+            return now
+
+    monkeypatch.setattr(sqlite_store, "datetime", FixedDateTime)
+
+    sqlite_store.upsert_many(
+        conn,
+        [
+            base_listing({"id": "a", "year": 2020, "price": 9000}),
+            base_listing({"id": "b", "year": None, "price": 9500}),
+            base_listing({"id": "c", "year": 2020, "price": 500}),
+        ],
+        scraper.CSV_FIELDNAMES,
+        timestamp=now,
+    )
+
+    stats = sqlite_store.fetch_model_year_stats(conn, min_price=1000)
+    key = ("VW", "Golf", "Diesel", 2020)
+    assert key in stats
+    entry = stats[key]
+    assert entry["count_total"] == 2
+    assert entry["count_for_avg"] == 1
+    assert entry["sum"] == 9000
+
+
+def test_fetch_recent_price_changes_returns_deserialized_values():
+    conn = make_connection()
+    ts1 = datetime(2024, 1, 5, 13, 0, 0)
+    ts2 = datetime(2024, 1, 6, 13, 0, 0)
+    sqlite_store.upsert_many(conn, [base_listing()], scraper.CSV_FIELDNAMES, timestamp=ts1)
+    sqlite_store.upsert_many(
+        conn,
+        [base_listing({"price": 14900})],
+        scraper.CSV_FIELDNAMES,
+        timestamp=ts2,
+    )
+
+    changes = sqlite_store.fetch_recent_price_changes(conn, limit=1)
+    assert len(changes) == 1
+    assert changes[0]["old_price"] == 15000
+    assert changes[0]["new_price"] == 14900

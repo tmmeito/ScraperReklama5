@@ -157,6 +157,49 @@ def prompt_db_path(default_path=sqlite_store.DEFAULT_DB_PATH):
     return user_input
 
 
+def prompt_existing_db_path(default_path=sqlite_store.DEFAULT_DB_PATH):
+    while True:
+        prompt = (
+            "SQLite-Datenbank für Analysen wählen "
+            f"(Enter = {default_path}, q = Abbruch): "
+        )
+        user_input = input(prompt).strip()
+        if not user_input:
+            candidate = default_path
+        elif user_input.lower() in {"q", "quit"}:
+            return None
+        else:
+            candidate = user_input
+        if candidate and os.path.isfile(candidate):
+            return candidate
+        print(
+            f"⚠️  Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen."
+        )
+
+
+def prompt_analysis_source():
+    while True:
+        choice = (
+            input(
+                "Analysequelle wählen (Enter = SQLite, c = CSV, q = Abbruch): "
+            )
+            .strip()
+            .lower()
+        )
+        if not choice:
+            choice = "d"
+        if choice in {"q", "quit"}:
+            return None
+        if choice in {"c", "csv"}:
+            csv_filename = prompt_csv_filename()
+            if csv_filename:
+                return {"csv": csv_filename}
+            return None
+        db_path = prompt_existing_db_path()
+        if db_path:
+            return {"db": db_path}
+
+
 def _split_query_pairs(raw_query):
     pairs = []
     if not raw_query:
@@ -679,38 +722,83 @@ def save_raw_filtered(
         writer.writerows(saved_rows)
     return len(saved_rows)
 
-def aggregate_data(csv_filename=None, output_json=None):
-    if not csv_filename:
-        csv_filename = OUTPUT_CSV
+def aggregate_data(
+    csv_filename=None,
+    output_json=None,
+    *,
+    db_path=None,
+    db_connection=None,
+    search_term=None,
+    days=None,
+):
     if not output_json:
         output_json = OUTPUT_AGG
-    if not os.path.isfile(csv_filename):
-        print(
-            f"⚠️  Datei „{csv_filename}“ wurde nicht gefunden. Keine Aggregation möglich."
-        )
-        return {}
-    agg = defaultdict(lambda: {"count_total":0, "count_with_price":0, "sum_price":0})
-    with open(csv_filename, mode="r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            make  = row["make"]
-            model = row["model"]
-            price = parse_csv_int_field(row.get("price"))
-            key   = f"{make} {model}"
-            agg[key]["count_total"] += 1
-            if price is not None:
-                agg[key]["count_with_price"] += 1
-                agg[key]["sum_price"] += price
+
     result = {}
-    for key, val in agg.items():
-        avg = None
-        if val["count_with_price"] > 0:
-            avg = val["sum_price"] / val["count_with_price"]
-        result[key] = {
-            "count_total":      val["count_total"],
-            "count_with_price": val["count_with_price"],
-            "avg_price":        avg
-        }
+    if db_connection is not None or db_path:
+        close_after = False
+        conn = db_connection
+        if conn is None and db_path:
+            conn = sqlite_store.open_database(db_path)
+            close_after = True
+        try:
+            stats = sqlite_store.fetch_make_model_stats(
+                conn,
+                min_price=0,
+                days=days,
+                search=search_term,
+            )
+            agg = defaultdict(lambda: {"count_total": 0, "count_with_price": 0, "sum": 0})
+            for (make, model, _fuel), values in stats.items():
+                key = f"{make} {model}".strip()
+                bucket = agg[key]
+                bucket["count_total"] += values["count_total"]
+                bucket["count_with_price"] += values["count_for_avg"]
+                bucket["sum"] += values["sum"]
+            for key, val in agg.items():
+                avg = None
+                if val["count_with_price"] > 0:
+                    avg = val["sum"] / val["count_with_price"]
+                result[key] = {
+                    "count_total": val["count_total"],
+                    "count_with_price": val["count_with_price"],
+                    "avg_price": avg,
+                }
+        finally:
+            if close_after and conn is not None:
+                conn.close()
+    else:
+        if not csv_filename:
+            csv_filename = OUTPUT_CSV
+        if not os.path.isfile(csv_filename):
+            print(
+                f"⚠️  Datei „{csv_filename}“ wurde nicht gefunden. Keine Aggregation möglich."
+            )
+            return {}
+        agg = defaultdict(
+            lambda: {"count_total": 0, "count_with_price": 0, "sum_price": 0}
+        )
+        with open(csv_filename, mode="r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                make = row["make"]
+                model = row["model"]
+                price = parse_csv_int_field(row.get("price"))
+                key = f"{make} {model}"
+                agg[key]["count_total"] += 1
+                if price is not None:
+                    agg[key]["count_with_price"] += 1
+                    agg[key]["sum_price"] += price
+        for key, val in agg.items():
+            avg = None
+            if val["count_with_price"] > 0:
+                avg = val["sum_price"] / val["count_with_price"]
+            result[key] = {
+                "count_total": val["count_total"],
+                "count_with_price": val["count_with_price"],
+                "avg_price": avg,
+            }
+
     with open(output_json, mode="w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     return result
@@ -858,12 +946,19 @@ class AnalysisData:
         return stats
 
 
-def display_make_model_summary(analysis_data, min_price_for_avg=500, top_n=15):
-    if not analysis_data or not analysis_data.make_model_groups:
-        print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
-        return
+def _resolve_grouped_stats(source, accessor_name, min_price):
+    if source is None:
+        return None
+    if isinstance(source, dict):
+        return source
+    accessor = getattr(source, accessor_name, None)
+    if callable(accessor):
+        return accessor(min_price)
+    return None
 
-    grouped = analysis_data.make_model_stats(min_price_for_avg)
+
+def display_make_model_summary(analysis_data, min_price_for_avg=500, top_n=15):
+    grouped = _resolve_grouped_stats(analysis_data, "make_model_stats", min_price_for_avg)
     if not grouped:
         print("Keine Daten für die Auswertung verfügbar.")
         return
@@ -899,14 +994,35 @@ def display_make_model_summary(analysis_data, min_price_for_avg=500, top_n=15):
         )
 
 
+def _format_price_value(value):
+    if value is None:
+        return "-"
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def display_recent_price_changes(conn, limit=5):
+    if conn is None:
+        return
+    changes = sqlite_store.fetch_recent_price_changes(conn, limit=limit)
+    if not changes:
+        return
+    print("\nLetzte Preisänderungen:")
+    for change in changes:
+        old_txt = _format_price_value(change["old_price"])
+        new_txt = _format_price_value(change["new_price"])
+        print(
+            f"  • [{change['changed_at']}] {change['listing_id']}: "
+            f"{old_txt} → {new_txt}"
+        )
+
+
 def display_avg_price_by_model_year(
     analysis_data, min_listings=1, min_price_for_avg=500
 ):
-    if not analysis_data or not analysis_data.model_year_groups:
-        print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
-        return
-
-    groups = analysis_data.model_year_stats(min_price_for_avg)
+    groups = _resolve_grouped_stats(analysis_data, "model_year_stats", min_price_for_avg)
     if not groups:
         print("Nicht genügend Daten mit Preis und Baujahr vorhanden.")
         return
@@ -957,48 +1073,130 @@ def prompt_min_price(current_value=500):
             print("Ungültiger Mindestpreis. Bitte erneut versuchen.")
 
 
-def analysis_menu(csv_filename=OUTPUT_CSV):
-    if not os.path.isfile(csv_filename):
+def _prompt_days_filter(current_value=None):
+    label = current_value if current_value is not None else "alle"
+    while True:
+        user_input = input(
+            f"Filter: Wieviele Tage zurück betrachten? (Enter = {label}, 0 = alle): "
+        ).strip()
+        if not user_input:
+            return current_value
+        try:
+            value = int(user_input)
+            if value <= 0:
+                return None
+            return value
+        except ValueError:
+            print("⚠️  Bitte eine ganze Zahl eingeben.")
+
+
+def _prompt_search_filter(current_value=None):
+    label = current_value if current_value else "-"
+    user_input = input(
+        f"Filter: Freitext-Suche (Enter = {label}, Leer = kein Filter): "
+    ).strip()
+    return user_input or None
+
+
+def analysis_menu(csv_filename=OUTPUT_CSV, *, db_path=None):
+    conn = None
+    if db_path:
+        if not os.path.isfile(db_path):
+            print(f"\n⚠️  Datenbank „{db_path}“ nicht gefunden.")
+            return "exit"
+        try:
+            conn = sqlite_store.open_database(db_path)
+        except Exception as exc:
+            print(f"⚠️  Konnte Datenbank nicht öffnen: {exc}")
+            return "exit"
+    elif not os.path.isfile(csv_filename):
         print(f"\n⚠️  Keine Daten für Analysen vorhanden (Datei: {csv_filename}).")
         return "exit"
+
     analysis_data = None
     min_price_for_avg = prompt_min_price(500)
-    while True:
-        print_section("📊 Analyse-Center")
-        print(f"   • Quelle........: {csv_filename}")
-        print(f"   • Mindestpreis..: {min_price_for_avg} €")
-        print("\n  [1] 📈 Häufigste Automarken und Modelle")
-        print("  [2] 💶 Durchschnittspreise pro Modell/Baujahr")
-        print("  [3] 🎯 Mindestpreis anpassen")
-        print("  [4] ↩️  Analyse beenden")
-        print()
-        print("  [0] 🔁 Zurück zum Hauptmenü")
-        print()
-        choice = input("Deine Auswahl: ").strip()
-        if choice == "1":
-            if analysis_data is None:
-                rows = load_rows_from_csv(csv_filename)
-                analysis_data = AnalysisData(rows)
-            display_make_model_summary(
-                analysis_data, min_price_for_avg=min_price_for_avg
-            )
-        elif choice == "2":
-            if analysis_data is None:
-                rows = load_rows_from_csv(csv_filename)
-                analysis_data = AnalysisData(rows)
-            display_avg_price_by_model_year(
-                analysis_data,
-                min_listings=1,
-                min_price_for_avg=min_price_for_avg,
-            )
-        elif choice == "3":
-            min_price_for_avg = prompt_min_price(min_price_for_avg)
-        elif choice == "0":
-            return "main"
-        elif choice == "4":
-            return "exit"
-        else:
-            print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
+    db_days_filter = None
+    db_search_filter = None
+    try:
+        while True:
+            print_section("📊 Analyse-Center")
+            if conn is not None:
+                print(f"   • Quelle........: SQLite ({db_path})")
+                label_days = db_days_filter if db_days_filter is not None else "alle"
+                label_search = db_search_filter if db_search_filter else "-"
+                print(f"   • Filter Tage...: {label_days}")
+                print(f"   • Filter Suche..: {label_search}")
+            else:
+                print(f"   • Quelle........: {csv_filename}")
+            print(f"   • Mindestpreis..: {min_price_for_avg} €")
+            print("\n  [1] 📈 Häufigste Automarken und Modelle")
+            print("  [2] 💶 Durchschnittspreise pro Modell/Baujahr")
+            print("  [3] 🎯 Mindestpreis anpassen")
+            if conn is not None:
+                print("  [5] ⏱️  Tagesfilter ändern")
+                print("  [6] 🔎 Suchfilter ändern")
+            print("  [4] ↩️  Analyse beenden")
+            print()
+            print("  [0] 🔁 Zurück zum Hauptmenü")
+            print()
+            choice = input("Deine Auswahl: ").strip()
+            if choice == "1":
+                if conn is not None:
+                    stats = sqlite_store.fetch_make_model_stats(
+                        conn,
+                        min_price=min_price_for_avg,
+                        days=db_days_filter,
+                        search=db_search_filter,
+                    )
+                    display_make_model_summary(
+                        stats, min_price_for_avg=min_price_for_avg
+                    )
+                    display_recent_price_changes(conn)
+                else:
+                    if analysis_data is None:
+                        rows = load_rows_from_csv(csv_filename)
+                        analysis_data = AnalysisData(rows)
+                    display_make_model_summary(
+                        analysis_data, min_price_for_avg=min_price_for_avg
+                    )
+            elif choice == "2":
+                if conn is not None:
+                    stats = sqlite_store.fetch_model_year_stats(
+                        conn,
+                        min_price=min_price_for_avg,
+                        days=db_days_filter,
+                        search=db_search_filter,
+                    )
+                    display_avg_price_by_model_year(
+                        stats,
+                        min_listings=1,
+                        min_price_for_avg=min_price_for_avg,
+                    )
+                    display_recent_price_changes(conn)
+                else:
+                    if analysis_data is None:
+                        rows = load_rows_from_csv(csv_filename)
+                        analysis_data = AnalysisData(rows)
+                    display_avg_price_by_model_year(
+                        analysis_data,
+                        min_listings=1,
+                        min_price_for_avg=min_price_for_avg,
+                    )
+            elif choice == "3":
+                min_price_for_avg = prompt_min_price(min_price_for_avg)
+            elif conn is not None and choice == "5":
+                db_days_filter = _prompt_days_filter(db_days_filter)
+            elif conn is not None and choice == "6":
+                db_search_filter = _prompt_search_filter(db_search_filter)
+            elif choice == "0":
+                return "main"
+            elif choice == "4":
+                return "exit"
+            else:
+                print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def run_scraper_flow_from_config(config, *, interactive=True):
@@ -1193,11 +1391,14 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
     if csv_filename:
         aggregate_data(csv_filename=csv_filename)
+    elif db_path:
+        aggregate_data(
+            db_path=db_path,
+            search_term=config.search_term,
+            days=days,
+        )
     if interactive:
-        if csv_filename:
-            return analysis_menu(csv_filename)
-        print("ℹ️  Analysefunktionen für SQLite-Datenbanken folgen später.")
-        return "main"
+        return analysis_menu(csv_filename or OUTPUT_CSV, db_path=db_path)
     return {
         "total_found": total_found,
         "total_saved": total_saved,
@@ -1495,12 +1696,14 @@ def main(argv=None):
             print("👋 Bis zum nächsten Mal!")
             break
         if start_choice == "2":
-            csv_filename = prompt_csv_filename()
-            if not csv_filename:
-                print("⚠️  Keine gültige CSV-Datei angegeben. Zurück zum Hauptmenü …")
+            source = prompt_analysis_source()
+            if not source:
+                print("⚠️  Keine gültige Quelle angegeben. Zurück zum Hauptmenü …")
                 time.sleep(1.5)
                 continue
-            outcome = analysis_menu(csv_filename)
+            csv_filename = source.get("csv")
+            db_path = source.get("db")
+            outcome = analysis_menu(csv_filename or OUTPUT_CSV, db_path=db_path)
             if outcome == "main":
                 continue
             print("👋 Bis zum nächsten Mal!")
