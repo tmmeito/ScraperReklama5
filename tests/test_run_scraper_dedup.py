@@ -1,4 +1,3 @@
-import csv
 import sys
 from pathlib import Path
 
@@ -7,6 +6,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scraperReklama5 as scraper
+from storage import sqlite_store
 
 
 def _make_listing(listing_id, date_text="2024-01-01 12:00"):
@@ -26,7 +26,7 @@ def _make_listing(listing_id, date_text="2024-01-01 12:00"):
 
 
 def test_run_scraper_filters_duplicate_ids(monkeypatch, tmp_path):
-    csv_path = tmp_path / "cars.csv"
+    db_path = tmp_path / "cars.db"
     html_pages = {1: "page-1", 2: "page-2", 3: "page-empty"}
 
     def fake_fetch(search_term, page_num, retries=3, backoff_seconds=2):
@@ -49,8 +49,8 @@ def test_run_scraper_filters_duplicate_ids(monkeypatch, tmp_path):
 
     aggregate_calls = []
 
-    def fake_aggregate(csv_filename=None, output_json=None):
-        aggregate_calls.append(csv_filename)
+    def fake_aggregate(*args, **kwargs):
+        aggregate_calls.append(kwargs)
         return {}
 
     monkeypatch.setattr(scraper, "aggregate_data", fake_aggregate)
@@ -59,23 +59,24 @@ def test_run_scraper_filters_duplicate_ids(monkeypatch, tmp_path):
         search_term="test",
         days=5,
         enable_detail_capture=False,
-        csv_filename=str(csv_path),
+        db_path=str(db_path),
     )
 
     result = scraper.run_scraper_flow_from_config(config, interactive=False)
     assert result["total_saved"] == 3
-    assert result["csv_filename"] == str(csv_path)
-    assert aggregate_calls == [str(csv_path)]
+    assert result["db_path"] == str(db_path)
+    assert aggregate_calls and aggregate_calls[0].get("db_path") == str(db_path)
 
-    with open(csv_path, newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        ids = [row["id"] for row in reader]
+    conn = sqlite_store.open_database(str(db_path))
+    rows = conn.execute("SELECT id FROM listings ORDER BY id").fetchall()
+    conn.close()
+    ids = [row["id"] for row in rows]
 
     assert ids == ["1", "2", "3"]
 
 
 def test_run_scraper_pre_filtered_saves_skip_extra_filter(monkeypatch, tmp_path):
-    csv_path = tmp_path / "cars.csv"
+    db_path = tmp_path / "cars.db"
     html_pages = {1: "page-1"}
 
     def fake_fetch(search_term, page_num, retries=3, backoff_seconds=2):
@@ -106,7 +107,7 @@ def test_run_scraper_pre_filtered_saves_skip_extra_filter(monkeypatch, tmp_path)
         search_term="test",
         days=5,
         enable_detail_capture=False,
-        csv_filename=str(csv_path),
+        db_path=str(db_path),
     )
 
     scraper.run_scraper_flow_from_config(config, interactive=False)
