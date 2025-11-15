@@ -1023,6 +1023,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
     total_found = 0
     total_saved = 0
+    seen_ids = set()
+    duplicates_skipped_total = 0
 
     for page in range(1, 200):
         html = fetch_listing_page(search_term, page)
@@ -1042,6 +1044,19 @@ def run_scraper_flow_from_config(config, *, interactive=True):
             if item["date"] and is_within_days(item["date"], days, item["promoted"])
         ]
 
+        duplicates_skipped_page = 0
+        deduplicated = []
+        for item in eligible_listings:
+            item_id = item.get("id")
+            if item_id and item_id in seen_ids:
+                duplicates_skipped_page += 1
+                continue
+            if item_id:
+                seen_ids.add(item_id)
+            deduplicated.append(item)
+        eligible_listings = deduplicated
+        duplicates_skipped_total += duplicates_skipped_page
+
         remaining_limit = None
         if limit is not None:
             remaining_limit = max(0, limit - total_saved)
@@ -1054,6 +1069,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         total_found += found_on_page
 
         print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
+        if duplicates_skipped_page:
+            print(f"↺ {duplicates_skipped_page} Duplikate übersprungen")
         print(INLINE_PROGRESS_SYMBOL * found_on_page)
 
         progress_callback = None
@@ -1107,6 +1124,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
     print(
         f"   • Geprüfte Einträge : {total_found}\n"
         f"   • Gespeicherte Einträge: {total_saved}\n"
+        f"   • Übersprungene Duplikate: {duplicates_skipped_total}\n"
     )
 
     aggregate_data(csv_filename=csv_filename)
