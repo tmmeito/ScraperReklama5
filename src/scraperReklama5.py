@@ -1493,7 +1493,7 @@ def main(argv=None):
         print_banner("SCRAPER FÜR reklama5.mk AUTOMOBILE")
         print("Was möchtest du tun?")
         print("  [1] 🔍 Neue Suche durchführen")
-        print("  [2] 📊 Analyse einer bestehenden SQLite-Datenbank")
+        print("  [2] 📊 Analyse")
         print()
         print("  [q] ❌ Programm beenden")
         print()
@@ -1503,9 +1503,11 @@ def main(argv=None):
             print("👋 Bis zum nächsten Mal!")
             break
         if start_choice == "2":
-            db_path = prompt_existing_db_path()
-            if not db_path:
-                print("ℹ️  Analyse abgebrochen. Zurück zum Hauptmenü …")
+            db_path = sqlite_store.DEFAULT_DB_PATH
+            if not os.path.isfile(db_path):
+                print(
+                    f"⚠️  SQLite-Datei „{db_path}“ wurde nicht gefunden. Zurück zum Hauptmenü …"
+                )
                 time.sleep(1.5)
                 continue
             outcome = analysis_menu(db_path=db_path)
