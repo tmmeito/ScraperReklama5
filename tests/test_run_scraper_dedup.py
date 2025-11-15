@@ -27,6 +27,7 @@ def _make_listing(listing_id, date_text="2024-01-01 12:00"):
 
 def test_run_scraper_filters_duplicate_ids(monkeypatch, tmp_path):
     db_path = tmp_path / "cars.db"
+    scraper.sqlite_store.DEFAULT_DB_PATH = str(db_path)
     html_pages = {1: "page-1", 2: "page-2", 3: "page-empty"}
 
     def fake_fetch(search_term, page_num, retries=3, backoff_seconds=2):
@@ -77,6 +78,7 @@ def test_run_scraper_filters_duplicate_ids(monkeypatch, tmp_path):
 
 def test_run_scraper_pre_filtered_saves_skip_extra_filter(monkeypatch, tmp_path):
     db_path = tmp_path / "cars.db"
+    scraper.sqlite_store.DEFAULT_DB_PATH = str(db_path)
     html_pages = {1: "page-1"}
 
     def fake_fetch(search_term, page_num, retries=3, backoff_seconds=2):

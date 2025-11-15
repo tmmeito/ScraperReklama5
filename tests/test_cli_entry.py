@@ -73,6 +73,7 @@ def test_cli_entry_triggers_non_interactive_run(monkeypatch, tmp_path):
     monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
 
     db_path = tmp_path / "cars.db"
+    scraper.sqlite_store.DEFAULT_DB_PATH = str(db_path)
     result = scraper.main(
         [
             "--search",
@@ -84,8 +85,7 @@ def test_cli_entry_triggers_non_interactive_run(monkeypatch, tmp_path):
             "--details",
             "--details-delay",
             "0.5",
-            "--db",
-            str(db_path),
+            "--use-sqlite",
         ]
     )
 
@@ -156,6 +156,7 @@ def test_cli_details_delay_zero_propagates_none(monkeypatch, tmp_path):
     monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
 
     db_path = tmp_path / "cars.db"
+    scraper.sqlite_store.DEFAULT_DB_PATH = str(db_path)
     scraper.main(
         [
             "--search",
@@ -167,8 +168,7 @@ def test_cli_details_delay_zero_propagates_none(monkeypatch, tmp_path):
             "--details",
             "--details-delay",
             "0",
-            "--db",
-            str(db_path),
+            "--use-sqlite",
         ]
     )
 
