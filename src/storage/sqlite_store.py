@@ -121,6 +121,24 @@ def upsert_listing(
     upsert_many(conn, [listing], fieldnames, timestamp=timestamp)
 
 
+def calculate_listing_hash(values: Mapping[str, object]) -> str:
+    """Public helper that mirrors the internal hash generation logic."""
+
+    return _calculate_listing_hash(values)
+
+
+def fetch_listing_by_id(
+    conn: sqlite3.Connection,
+    listing_id: str,
+):
+    """Return the listing row for ``listing_id`` or ``None`` if missing."""
+
+    if not listing_id:
+        return None
+    row = conn.execute("SELECT * FROM listings WHERE id = ?", (listing_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def upsert_many(
     conn: sqlite3.Connection,
     listings: Iterable[Mapping[str, object]],
