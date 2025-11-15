@@ -699,6 +699,7 @@ def save_raw_filtered(
     days,
     limit=None,
     csv_filename=OUTPUT_CSV,
+    pre_filtered=False,
     *,
     db_connection=None,
 ):
@@ -706,6 +707,9 @@ def save_raw_filtered(
     for r in rows:
         if limit is not None and len(saved_rows) >= limit:
             break
+        if pre_filtered:
+            saved_rows.append(r)
+            continue
         if r["date"] and is_within_days(r["date"], days, r["promoted"]):
             saved_rows.append(r)
 
@@ -1349,6 +1353,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
                 "limit": remaining_limit,
                 "csv_filename": csv_filename,
             }
+            save_kwargs["pre_filtered"] = True
             if db_connection is not None:
                 save_kwargs["db_connection"] = db_connection
             saved_in_page = save_raw_filtered(
