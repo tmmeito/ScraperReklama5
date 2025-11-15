@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from datetime import datetime, timedelta
 from collections import defaultdict
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from urllib import request as urllib_request
 from urllib import error as urllib_error
 from urllib.parse import urlsplit, urlunsplit, quote_plus
@@ -66,13 +66,16 @@ MK_MONTHS = {
 }
 
 
+DETAIL_DELAY_UNSET = object()
+
+
 @dataclass
 class ScraperConfig:
     search_term: str = ""
     days: int = 1
     limit: Optional[int] = None
     enable_detail_capture: bool = False
-    detail_delay_range: Optional[Tuple[float, float]] = None
+    detail_delay_range: Union[None, Tuple[float, float], object] = DETAIL_DELAY_UNSET
     detail_worker_count: int = 1
     detail_rate_limit_permits: Optional[int] = None
     csv_filename: str = OUTPUT_CSV
@@ -1254,9 +1257,9 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
     detail_delay_range = config.detail_delay_range
     if enable_detail_capture:
-        if detail_delay_range is None:
+        if detail_delay_range is DETAIL_DELAY_UNSET:
             detail_delay_range = (1.0, 2.0)
-        elif detail_delay_range[0] > detail_delay_range[1]:
+        elif detail_delay_range is not None and detail_delay_range[0] > detail_delay_range[1]:
             detail_delay_range = (detail_delay_range[1], detail_delay_range[0])
     else:
         detail_delay_range = None
