@@ -655,11 +655,11 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
 
         if price is None:
             grouped[key]["missing_price_count"] += 1
-            continue
-        if price < min_price_for_avg:
+        elif price < min_price_for_avg:
             grouped[key]["excluded_low_price"] += 1
-            continue
-
+        else:
+            grouped[key]["count_for_avg"] += 1
+            grouped[key]["sum"] += price
 
 def display_make_model_summary(analysis_data, min_price_for_avg=500, top_n=15):
     if not analysis_data or not analysis_data.make_model_groups:
@@ -730,15 +730,13 @@ def display_avg_price_by_model_year(
         groups[key]["count_total"] += 1
         if price is None:
             groups[key]["missing_price_count"] += 1
-            continue
-        if year is None:
+        elif year is None:
             groups[key]["missing_year_count"] += 1
-            continue
-        if price < min_price_for_avg:
+        elif price < min_price_for_avg:
             groups[key]["excluded_low_price"] += 1
-            continue
-        groups[key]["count"] += 1
-        groups[key]["sum"] += price
+        else:
+            groups[key]["count"] += 1
+            groups[key]["sum"] += price
     if not groups:
         print("Nicht genügend Daten mit Preis und Baujahr vorhanden.")
         return
