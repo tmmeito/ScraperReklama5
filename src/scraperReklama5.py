@@ -1253,12 +1253,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
 def run_scraper_flow():
     print_section("🚀 Neue Suche starten")
-    print("  [1] reklama5.mk")
+    print("ℹ️  Aktuell wird nur reklama5.mk unterstützt.")
     print()
-    choice = input("Deine Wahl (Enter = 1): ").strip() or "1"
-    if choice != "1":
-        print("⚠️  Nur ‚reklama5‘ aktuell unterstützt. Zurück zum Hauptmenü.")
-        return "main"
 
     global BASE_URL_TEMPLATE
     print_section("🔗 Basis-URL-Konfiguration")
