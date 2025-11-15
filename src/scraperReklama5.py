@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from datetime import datetime, timedelta
 from collections import defaultdict
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 from urllib import request as urllib_request
 from urllib import error as urllib_error
 from urllib.parse import urlsplit, urlunsplit, quote_plus
@@ -895,12 +895,26 @@ def classify_listing_status(listings, db_connection, developer_logger=None):
     if not listings:
         return status_map
 
-    fallback_counter = 0
-    total_items = len(listings)
+    normalized_ids_per_listing: List[Optional[str]] = []
+    normalized_ids_to_fetch: List[str] = []
     for listing in listings:
-        fallback_counter += 1
         raw_id = listing.get("id")
         normalized_id = str(raw_id) if raw_id not in (None, "") else None
+        normalized_ids_per_listing.append(normalized_id)
+        if normalized_id:
+            normalized_ids_to_fetch.append(normalized_id)
+
+    existing_rows: Dict[str, Dict[str, object]] = {}
+    if db_connection is not None and normalized_ids_to_fetch:
+        existing_rows = sqlite_store.fetch_listings_by_ids(
+            db_connection, normalized_ids_to_fetch
+        )
+
+    fallback_counter = 0
+    total_items = len(listings)
+    for idx, listing in enumerate(listings):
+        fallback_counter += 1
+        normalized_id = normalized_ids_per_listing[idx]
         cache_key = normalized_id or f"tmp-{fallback_counter}"
         listing_status = STATUS_NEW
         changes: Dict[str, Dict[str, object]] = {}
@@ -924,7 +938,7 @@ def classify_listing_status(listings, db_connection, developer_logger=None):
         existing = None
         if use_database:
             normalized_payload = _normalize_listing_payload_for_hash(listing)
-            existing = sqlite_store.fetch_listing_by_id(db_connection, normalized_id)
+            existing = existing_rows.get(normalized_id)
             if existing is None:
                 listing_status = STATUS_NEW
             else:

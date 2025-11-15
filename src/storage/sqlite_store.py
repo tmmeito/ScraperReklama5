@@ -139,6 +139,22 @@ def fetch_listing_by_id(
     return dict(row) if row else None
 
 
+def fetch_listings_by_ids(
+    conn: sqlite3.Connection,
+    ids: Iterable[object],
+) -> Mapping[str, Mapping[str, object]]:
+    """Fetch multiple listings at once and return a mapping of ``id`` to rows."""
+
+    normalized_ids = [str(listing_id) for listing_id in ids if listing_id not in (None, "")]
+    if not normalized_ids:
+        return {}
+
+    placeholders = ", ".join(["?"] * len(normalized_ids))
+    sql = f"SELECT * FROM listings WHERE id IN ({placeholders})"
+    rows = conn.execute(sql, normalized_ids).fetchall()
+    return {row["id"]: dict(row) for row in rows}
+
+
 def upsert_many(
     conn: sqlite3.Connection,
     listings: Iterable[Mapping[str, object]],

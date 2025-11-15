@@ -38,6 +38,24 @@ def build_listing(**overrides):
     return base
 
 
+def test_fetch_listings_by_ids_returns_mapping():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    sqlite_store.init_schema(conn, DB_FIELDNAMES)
+
+    listing_one = build_listing(price=9000)
+    listing_two = build_listing(id="listing-2", price=12500)
+    sqlite_store.upsert_many(conn, [listing_one, listing_two], DB_FIELDNAMES)
+
+    rows = sqlite_store.fetch_listings_by_ids(
+        conn, ["listing-1", "missing", "listing-2"]
+    )
+
+    assert set(rows.keys()) == {"listing-1", "listing-2"}
+    assert rows["listing-1"]["price"] == 9000
+    assert rows["listing-2"]["price"] == 12500
+
+
 def test_classify_listing_status_ignores_detail_only_fields():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
