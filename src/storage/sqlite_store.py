@@ -52,6 +52,25 @@ def init_schema(conn: sqlite3.Connection, fieldnames: Sequence[str]) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_listings_hash ON listings(hash)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS listing_changes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            listing_id TEXT NOT NULL,
+            field TEXT NOT NULL,
+            old_value TEXT,
+            new_value TEXT,
+            change_type TEXT,
+            changed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_listing_changes_listing ON listing_changes(listing_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_listing_changes_changed_at ON listing_changes(changed_at)"
+    )
     conn.commit()
 
 
@@ -72,6 +91,24 @@ def _calculate_listing_hash(values: Mapping[str, object]) -> str:
     serializable = {k: values.get(k) for k in sorted(values.keys())}
     payload = json.dumps(serializable, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _clean_field_value(value):
+    value = _normalize_value(value)
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+    return value
+
+
+def _serialize_change_value(value):
+    if value is None:
+        return None
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
 
 
 def upsert_listing(
@@ -109,19 +146,72 @@ def upsert_many(
         f"INSERT INTO listings ({', '.join(columns)}) VALUES ({placeholders}) "
         f"ON CONFLICT(id) DO UPDATE SET {update_assignments}"
     )
+    change_sql = (
+        "INSERT INTO listing_changes (listing_id, field, old_value, new_value, change_type, changed_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)"
+    )
 
-    def row_values(item: Mapping[str, object]):
-        normalized = {name: _normalize_value(item.get(name)) for name in fieldnames}
+    def prepare_row(item: Mapping[str, object]):
+        normalized = {name: _clean_field_value(item.get(name)) for name in fieldnames}
         normalized["id"] = _ensure_listing_id(normalized)
-        normalized["hash"] = _calculate_listing_hash(normalized)
-        normalized["created_at"] = now_text
-        normalized["updated_at"] = now_text
-        normalized["last_seen"] = now_text
-        return [normalized.get(col) for col in columns]
+        listing_id = normalized["id"]
+        existing_row = conn.execute(
+            "SELECT * FROM listings WHERE id = ?",
+            (listing_id,),
+        ).fetchone()
+        existing = dict(existing_row) if existing_row else None
+
+        merged = {}
+        for name in fieldnames:
+            value = normalized.get(name)
+            if value is None and existing is not None:
+                merged[name] = existing.get(name)
+            else:
+                merged[name] = value
+
+        merged_hash_payload = {name: merged.get(name) for name in fieldnames}
+        merged["hash"] = _calculate_listing_hash(merged_hash_payload)
+        merged["created_at"] = (
+            existing.get("created_at") if existing is not None else now_text
+        )
+        merged["last_seen"] = now_text
+
+        changes = []
+        data_changed = False
+        if existing is None:
+            data_changed = True
+        else:
+            for name in fieldnames:
+                if name == "id":
+                    continue
+                old_value = existing.get(name)
+                new_value = merged.get(name)
+                if old_value != new_value:
+                    data_changed = True
+                    changes.append(
+                        (
+                            listing_id,
+                            name,
+                            _serialize_change_value(old_value),
+                            _serialize_change_value(new_value),
+                            name,
+                            now_text,
+                        )
+                    )
+
+        merged["updated_at"] = (
+            now_text if data_changed else existing.get("updated_at")
+        ) if existing is not None else now_text
+
+        row_values = [merged.get(col) for col in columns]
+        return row_values, changes
 
     with conn:
         for item in listings:
-            conn.execute(sql, row_values(item))
+            row_values, changes = prepare_row(item)
+            conn.execute(sql, row_values)
+            if changes:
+                conn.executemany(change_sql, changes)
     return len(listings)
 
 
