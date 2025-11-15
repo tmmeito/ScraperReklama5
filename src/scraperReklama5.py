@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from urllib import request as urllib_request
 from urllib import error as urllib_error
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, quote_plus
 
 from bs4 import BeautifulSoup
 
@@ -22,11 +22,6 @@ try:
     warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
 except Exception:
     pass
-
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 BASE_URL_TEMPLATE = "https://www.reklama5.mk/Search?city=&cat=24&q={search_term}&page={page_num}"
 OUTPUT_CSV        = "reklama5_autos_raw.csv"
@@ -178,23 +173,26 @@ def build_base_url_template(raw_input):
     new_query = _rebuild_query_string(query_pairs)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
-def init_driver():
-    options = webdriver.SafariOptions()
-    driver = webdriver.Safari(options=options)
-    return driver
+def fetch_listing_page(search_term, page_num, retries=3, backoff_seconds=2):
+    encoded_term = quote_plus(search_term or "")
+    url = BASE_URL_TEMPLATE.format(search_term=encoded_term, page_num=page_num)
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; reklama5-scraper/1.0)"}
+    req = urllib_request.Request(url, headers=headers)
 
-def fetch_page(driver, search_term, page_num):
-    url = BASE_URL_TEMPLATE.format(search_term=search_term, page_num=page_num)
-    driver.get(url)
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div.row.ad-top-div"))
-        )
-    except Exception:
-        print(f"WARNING: No listings found within wait time on page {page_num}")
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    time.sleep(3)
-    return driver.page_source
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib_request.urlopen(req, timeout=20) as response:
+                html_bytes = response.read()
+                charset = response.headers.get_content_charset() or "utf-8"
+            return html_bytes.decode(charset, errors="replace")
+        except (urllib_error.URLError, socket.timeout) as exc:
+            print(
+                "⚠️  Ergebnisseite konnte nicht geladen werden | "
+                f"{shorten_url(url)} (Versuch {attempt}/{retries}: {exc})"
+            )
+            if attempt >= retries:
+                return None
+            time.sleep(backoff_seconds * attempt)
 
 def parse_listing(html):
     soup     = BeautifulSoup(html, "html.parser")
@@ -980,83 +978,83 @@ def run_scraper_flow():
                     detail_delay_range = (1.0, 2.0)
                     print("⚠️  Ungültige Eingabe – verwende zufällige Pause von 1–2 Sekunden.")
 
-    driver = init_driver()
     if os.path.isfile(OUTPUT_CSV):
         os.remove(OUTPUT_CSV)
 
     total_found   = 0
     total_saved   = 0
 
-    try:
-        for page in range(1, 200):
-            html     = fetch_page(driver, search_term, page)
-            listings = parse_listing(html)
-
-            if not listings:
-                print()
-                print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
-                break
-
-            eligible_listings = [
-                item for item in listings
-                if item["date"] and is_within_days(item["date"], days, item["promoted"])
-            ]
-
-            remaining_limit = None
-            if limit is not None:
-                remaining_limit = max(0, limit - total_saved)
-                if remaining_limit == 0:
-                    print(f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
-                    break
-                eligible_listings = eligible_listings[:remaining_limit]
-
-            found_on_page = len(eligible_listings)
-            total_found  += found_on_page
-
-            print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
-            print(INLINE_PROGRESS_SYMBOL * found_on_page)
-
-            progress_callback = None
-            progress_finalize = None
-            if enable_detail_capture and found_on_page:
-                progress_callback, progress_finalize = build_inline_progress_printer(found_on_page)
-
-            enrich_listings_with_details(
-                eligible_listings,
-                enable_detail_capture,
-                delay_range=detail_delay_range,
-                max_items=remaining_limit if limit is not None else None,
-                progress_callback=progress_callback,
-            )
-
-            if progress_finalize:
-                progress_finalize()
-
-            saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
-            total_saved   += saved_in_page
-            print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
+    for page in range(1, 200):
+        html = fetch_listing_page(search_term, page)
+        if not html:
             print()
+            print(f"⚠️  Seite {page} konnte nicht geladen werden. Stop.")
+            break
+        listings = parse_listing(html)
 
-            if limit is not None and total_saved >= limit:
-                print(f"ℹ️  Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
+        if not listings:
+            print()
+            print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
+            break
+
+        eligible_listings = [
+            item for item in listings
+            if item["date"] and is_within_days(item["date"], days, item["promoted"])
+        ]
+
+        remaining_limit = None
+        if limit is not None:
+            remaining_limit = max(0, limit - total_saved)
+            if remaining_limit == 0:
+                print(f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
                 break
+            eligible_listings = eligible_listings[:remaining_limit]
 
-            stop = False
-            for item in listings:
-                if item["date"] and is_older_than_days(item["date"], days, item["promoted"]):
-                    print(
-                        f"ℹ️  Anzeige älter als {days} Tage gefunden "
-                        f"(ID {item['id']}) auf Seite {page}. Stop."
-                    )
-                    stop = True
-                    break
-            if stop:
+        found_on_page = len(eligible_listings)
+        total_found  += found_on_page
+
+        print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
+        print(INLINE_PROGRESS_SYMBOL * found_on_page)
+
+        progress_callback = None
+        progress_finalize = None
+        if enable_detail_capture and found_on_page:
+            progress_callback, progress_finalize = build_inline_progress_printer(found_on_page)
+
+        enrich_listings_with_details(
+            eligible_listings,
+            enable_detail_capture,
+            delay_range=detail_delay_range,
+            max_items=remaining_limit if limit is not None else None,
+            progress_callback=progress_callback,
+        )
+
+        if progress_finalize:
+            progress_finalize()
+
+        saved_in_page = save_raw_filtered(eligible_listings, days, limit=remaining_limit)
+        total_saved   += saved_in_page
+        print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
+        print()
+
+        if limit is not None and total_saved >= limit:
+            print(f"ℹ️  Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
+            break
+
+        stop = False
+        for item in listings:
+            if item["date"] and is_older_than_days(item["date"], days, item["promoted"]):
+                print(
+                    f"ℹ️  Anzeige älter als {days} Tage gefunden "
+                    f"(ID {item['id']}) auf Seite {page}. Stop."
+                )
+                stop = True
                 break
+        if stop:
+            break
 
-            sleep_time = random.uniform(2,4)
-            time.sleep(sleep_time)
-    finally:
-        driver.quit()
+        sleep_time = random.uniform(2,4)
+        time.sleep(sleep_time)
 
     print_section("📦 Zusammenfassung")
     print(
