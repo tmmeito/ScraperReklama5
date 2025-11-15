@@ -554,9 +554,9 @@ def save_raw_filtered(rows, days, limit=None):
     return saved
 
 def aggregate_data(csv_filename=None, output_json=None):
-    if csv_filename is None:
+    if not csv_filename:
         csv_filename = OUTPUT_CSV
-    if output_json is None:
+    if not output_json:
         output_json = OUTPUT_AGG
     if not os.path.isfile(csv_filename):
         print(
@@ -591,7 +591,7 @@ def aggregate_data(csv_filename=None, output_json=None):
 
 
 def load_rows_from_csv(csv_filename=None):
-    if csv_filename is None:
+    if not csv_filename:
         csv_filename = OUTPUT_CSV
     if not os.path.isfile(csv_filename):
         print(f"WARN: Datei „{csv_filename}“ wurde nicht gefunden.")
@@ -626,24 +626,14 @@ def parse_csv_int_field(value, default_empty=None):
         return None
 
 
-def _format_count_components(*values):
-    return " / ".join("-" if not value else str(value) for value in values)
+class AnalysisData:
+    """Voraggregierte Kennzahlen für wiederholte Analysen."""
 
-
-def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
-    if not rows:
-        print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
-        return
-
-    grouped = defaultdict(
-        lambda: {
-            "count_total": 0,
-            "count_for_avg": 0,
-            "sum": 0,
-            "excluded_low_price": 0,
-            "missing_price_count": 0,
-        }
-    )
+    def __init__(self, rows):
+        self._rows = rows or []
+        self.make_model_groups = {}
+        self.model_year_groups = {}
+        self._build_groups()
 
     @staticmethod
     def _bucket_factory():
@@ -653,12 +643,93 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
     def _normalize_field(value, fallback="Unbekannt"):
         return value if (value is not None and value != "") else fallback
 
-        if price is None:
-            grouped[key]["missing_price_count"] += 1
-            continue
-        if price < min_price_for_avg:
-            grouped[key]["excluded_low_price"] += 1
-            continue
+    def _build_groups(self):
+        def make_group_factory():
+            return {
+                "count_total": 0,
+                "price_buckets": defaultdict(self._bucket_factory),
+            }
+
+        make_model = defaultdict(make_group_factory)
+        model_year = defaultdict(make_group_factory)
+
+        for row in self._rows:
+            make = self._normalize_field(row.get("make"))
+            model = self._normalize_field(row.get("model"))
+            fuel = self._normalize_field(row.get("fuel"))
+            price = row.get("price")
+
+            key_make_model = (make, model, fuel)
+            make_group = make_model[key_make_model]
+            make_group["count_total"] += 1
+            if price is not None:
+                bucket = make_group["price_buckets"][price]
+                bucket["count"] += 1
+                bucket["sum"] += price
+
+            year = row.get("year")
+            if price is None or year is None:
+                continue
+            key_model_year = (make, model, fuel, year)
+            year_group = model_year[key_model_year]
+            year_group["count_total"] += 1
+            bucket = year_group["price_buckets"][price]
+            bucket["count"] += 1
+            bucket["sum"] += price
+
+        self.make_model_groups = self._finalize_groups(make_model)
+        self.model_year_groups = self._finalize_groups(model_year)
+
+    @staticmethod
+    def _finalize_groups(groups):
+        finalized = {}
+        for key, stats in groups.items():
+            finalized[key] = {
+                "count_total": stats["count_total"],
+                "price_buckets": dict(stats["price_buckets"]),
+            }
+        return finalized
+
+    @staticmethod
+    def _bucket_stats(price_buckets, min_price):
+        count = 0
+        total_sum = 0
+        excluded = 0
+        for price, bucket in price_buckets.items():
+            if price >= min_price:
+                count += bucket["count"]
+                total_sum += bucket["sum"]
+            else:
+                excluded += bucket["count"]
+        return count, total_sum, excluded
+
+    def make_model_stats(self, min_price):
+        stats = {}
+        for key, group in self.make_model_groups.items():
+            count, total_sum, excluded = self._bucket_stats(
+                group["price_buckets"], min_price
+            )
+            stats[key] = {
+                "count_total": group["count_total"],
+                "count_for_avg": count,
+                "sum": total_sum,
+                "excluded_low_price": excluded,
+            }
+        return stats
+
+    def model_year_stats(self, min_price):
+        stats = {}
+        for key, group in self.model_year_groups.items():
+            count, total_sum, excluded = self._bucket_stats(
+                group["price_buckets"], min_price
+            )
+            stats[key] = {
+                "count_total": group["count_total"],
+                "count_for_avg": count,
+                "sum": total_sum,
+                "excluded_low_price": excluded,
+            }
+        return stats
 
 
 def display_make_model_summary(analysis_data, min_price_for_avg=500, top_n=15):
@@ -693,11 +764,9 @@ def display_make_model_summary(analysis_data, min_price_for_avg=500, top_n=15):
             else None
         )
         avg_txt = f"{avg:,.0f}".replace(",", " ") if avg is not None else "-"
-        breakdown = _format_count_components(
-            stats.get("excluded_low_price", 0),
-            stats.get("missing_price_count", 0),
-        )
-        count_txt = f"{stats['count_total']} ({breakdown})"
+        excluded = stats.get("excluded_low_price", 0)
+        excluded_txt = "-" if not excluded else str(excluded)
+        count_txt = f"{stats['count_total']} ({excluded_txt})"
         print(
             f"{make:15} {model[:25]:25} {fuel[:15]:15} "
             f"{count_txt:>12} {avg_txt:>12}"
@@ -710,35 +779,8 @@ def display_avg_price_by_model_year(
     if not analysis_data or not analysis_data.model_year_groups:
         print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
         return
-    groups = defaultdict(
-        lambda: {
-            "count": 0,
-            "count_total": 0,
-            "sum": 0,
-            "excluded_low_price": 0,
-            "missing_price_count": 0,
-            "missing_year_count": 0,
-        }
-    )
-    for row in rows:
-        price = row.get("price")
-        year = row.get("year")
-        make = row.get("make") or "Unbekannt"
-        model = row.get("model") or "Unbekannt"
-        fuel = row.get("fuel") or "Unbekannt"
-        key = (make, model, fuel, year)
-        groups[key]["count_total"] += 1
-        if price is None:
-            groups[key]["missing_price_count"] += 1
-            continue
-        if year is None:
-            groups[key]["missing_year_count"] += 1
-            continue
-        if price < min_price_for_avg:
-            groups[key]["excluded_low_price"] += 1
-            continue
-        groups[key]["count"] += 1
-        groups[key]["sum"] += price
+
+    groups = analysis_data.model_year_stats(min_price_for_avg)
     if not groups:
         print("Nicht genügend Daten mit Preis und Baujahr vorhanden.")
         return
@@ -747,35 +789,26 @@ def display_avg_price_by_model_year(
         f"{'Marke':15} {'Modell':25} {'Baujahr':>8} "
         f"{'Treibstoff':15} {'Anzahl':>12} {'Ø-Preis':>12}"
     )
-    def _sort_group(item):
-        make, model, fuel, year = item[0]
-        year_sort = (year is None, year if isinstance(year, int) else year or 0)
-        return (
-            make or "",
-            model or "",
-            year_sort,
-            fuel or "",
-        )
-
-    sorted_groups = sorted(groups.items(), key=_sort_group)
+    sorted_groups = sorted(
+        groups.items(),
+        key=lambda item: (
+            item[0][0] or "",
+            item[0][1] or "",
+            item[0][3],
+            item[0][2] or "",
+        ),
+    )
     for (make, model, fuel, year), stats in sorted_groups:
         if stats["count_for_avg"] < min_listings:
             continue
-        if stats["count"]:
-            avg_price = stats["sum"] / stats["count"]
-            avg_txt = f"{avg_price:,.0f}".replace(",", " ")
-        else:
-            avg_txt = "-"
-        breakdown = _format_count_components(
-            stats.get("excluded_low_price", 0),
-            stats.get("missing_price_count", 0),
-            stats.get("missing_year_count", 0),
-        )
+        avg_price = stats["sum"] / stats["count_for_avg"]
+        avg_txt = f"{avg_price:,.0f}".replace(",", " ")
+        excluded = stats.get("excluded_low_price", 0)
+        excluded_txt = "-" if not excluded else str(excluded)
         count_total = stats["count_total"]
-        count_txt = f"{count_total} ({breakdown})"
-        year_txt = year if year is not None else "-"
+        count_txt = f"{count_total} ({excluded_txt})"
         print(
-            f"{make:15} {model[:25]:25} {year_txt:>8} {fuel[:15]:15} "
+            f"{make:15} {model[:25]:25} {year:>8} {fuel[:15]:15} "
             f"{count_txt:>12} {avg_txt:>12}"
         )
 
