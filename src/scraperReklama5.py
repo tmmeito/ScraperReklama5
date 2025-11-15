@@ -92,6 +92,18 @@ SETTINGS_DIR = os.path.join("data")
 USER_SETTINGS_FILE = os.path.join(SETTINGS_DIR, "user_settings.json")
 
 
+def format_duration(seconds):
+    try:
+        total_seconds = int(round(float(seconds)))
+    except (TypeError, ValueError):
+        total_seconds = 0
+    if total_seconds < 0:
+        total_seconds = 0
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 @dataclass
 class ScraperConfig:
     search_term: str = ""
@@ -1501,6 +1513,9 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         STATUS_UNCHANGED: 0,
     }
     skipped_unchanged_total = 0
+    start_time = time.time()
+    pages_viewed = 0
+    detail_requests = 0
 
     try:
         for page in range(1, 200):
@@ -1520,6 +1535,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
                 item for item in listings
                 if item["date"] and is_within_days(item["date"], days, item["promoted"])
             ]
+            pages_viewed += 1
 
             duplicates_skipped_page = 0
             deduplicated = []
@@ -1588,6 +1604,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
             progress_callback = None
             progress_finalize = None
             if enable_detail_capture and detail_candidates:
+                detail_requests += len(detail_candidates)
                 (
                     progress_callback,
                     progress_finalize,
@@ -1651,6 +1668,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         if db_connection is not None:
             db_connection.close()
 
+    total_duration = max(0.0, time.time() - start_time)
+
     print_section("📦 Zusammenfassung")
     print(
         f"   • Geprüfte Einträge : {total_found}\n"
@@ -1659,6 +1678,9 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         f"   • Neue Inserate.....: {status_totals.get(STATUS_NEW, 0)}\n"
         f"   • Geänderte Inserate: {status_totals.get(STATUS_CHANGED, 0)}\n"
         f"   • Unveränderte......: {status_totals.get(STATUS_UNCHANGED, 0)}\n"
+        f"   • Gesamtdauer.......: {format_duration(total_duration)}\n"
+        f"   • Seitenaufrufe.....: {pages_viewed}\n"
+        f"   • Detailabrufe......: {detail_requests}\n"
     )
     if skip_unchanged:
         print(f"   • Übersprungene unveränderte Einträge: {skipped_unchanged_total}")
@@ -1683,6 +1705,9 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         "db_path": db_path,
         "status_counts": status_totals,
         "skipped_unchanged": skipped_unchanged_total,
+        "pages_viewed": pages_viewed,
+        "detail_requests": detail_requests,
+        "duration_seconds": total_duration,
     }
 
 
