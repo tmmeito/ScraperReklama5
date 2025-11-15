@@ -455,16 +455,35 @@ def extract_first_int(text, pattern):
         return None
 
 def clean_price(price_text):
-    price_text = price_text.replace(".", "").replace(" ","").replace(" ","")
-    if re.search(r"(ПоДоговор|дог|nachVereinbarung|1€)", price_text, re.IGNORECASE):
+    if not price_text:
         return None
-    m = re.search(r"(\d+)", price_text)
-    if m:
-        try:
-            return int(m.group(1))
-        except:
-            return None
-    return None
+
+    text = price_text.replace("\xa0", " ").strip()
+    if re.search(r"(ПоДоговор|дог|nachVereinbarung|1€)", text, re.IGNORECASE):
+        return None
+
+    match = re.search(r"-?[\d\s\.,]+", text)
+    if not match:
+        return None
+
+    number_text = match.group(0).strip()
+    is_negative = number_text.startswith("-")
+    number_text = number_text.lstrip("- ")
+    number_text = number_text.replace(" ", "")
+
+    # Detect decimal separators (comma or period) at the end with one or two digits.
+    last_decimal_sep = max(number_text.rfind(","), number_text.rfind("."))
+    if last_decimal_sep != -1:
+        fractional = number_text[last_decimal_sep + 1 :]
+        if fractional.isdigit() and 1 <= len(fractional) <= 2:
+            number_text = number_text[:last_decimal_sep]
+
+    integer_text = number_text.replace(",", "").replace(".", "")
+    if not integer_text.isdigit():
+        return None
+
+    value = int(integer_text)
+    return -value if is_negative else value
 
 def parse_mk_date(date_text):
     if not date_text:
