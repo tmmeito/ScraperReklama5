@@ -7,6 +7,7 @@ import os
 import csv
 import json
 import warnings
+import socket
 from itertools import islice
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -365,20 +366,26 @@ def enrich_listings_with_details(
             time.sleep(wait_time)
 
 
-def fetch_detail_attributes(url):
+def fetch_detail_attributes(url, retries=3, backoff_seconds=2):
     if not url:
         return {}
+
     headers = {"User-Agent": "Mozilla/5.0 (compatible; reklama5-scraper/1.0)"}
     req = urllib_request.Request(url, headers=headers)
-    try:
-        with urllib_request.urlopen(req, timeout=15) as response:
-            html = response.read()
-    except urllib_error.URLError as exc:
-        print(
-            "⚠️  Detailseite konnte nicht geladen werden | "
-            f"{shorten_url(url)} ({exc})"
-        )
-        return {}
+
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib_request.urlopen(req, timeout=15) as response:
+                html = response.read()
+            break
+        except (urllib_error.URLError, socket.timeout) as exc:
+            print(
+                "⚠️  Detailseite konnte nicht geladen werden | "
+                f"{shorten_url(url)} (Versuch {attempt}/{retries}: {exc})"
+            )
+            if attempt >= retries:
+                return {}
+            time.sleep(backoff_seconds * attempt)
     soup = BeautifulSoup(html, "html.parser")
     raw = {}
     for label_div in soup.select("div.row.mt-3 div.col-5"):
