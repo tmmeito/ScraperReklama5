@@ -553,7 +553,11 @@ def save_raw_filtered(rows, days, limit=None):
                 saved += 1
     return saved
 
-def aggregate_data(csv_filename=OUTPUT_CSV, output_json=OUTPUT_AGG):
+def aggregate_data(csv_filename=None, output_json=None):
+    if csv_filename is None:
+        csv_filename = OUTPUT_CSV
+    if output_json is None:
+        output_json = OUTPUT_AGG
     if not os.path.isfile(csv_filename):
         print(
             f"⚠️  Datei „{csv_filename}“ wurde nicht gefunden. Keine Aggregation möglich."
@@ -586,7 +590,9 @@ def aggregate_data(csv_filename=OUTPUT_CSV, output_json=OUTPUT_AGG):
     return result
 
 
-def load_rows_from_csv(csv_filename=OUTPUT_CSV):
+def load_rows_from_csv(csv_filename=None):
+    if csv_filename is None:
+        csv_filename = OUTPUT_CSV
     if not os.path.isfile(csv_filename):
         print(f"WARN: Datei „{csv_filename}“ wurde nicht gefunden.")
         return []
@@ -620,6 +626,10 @@ def parse_csv_int_field(value, default_empty=None):
         return None
 
 
+def _format_count_components(*values):
+    return " / ".join("-" if not value else str(value) for value in values)
+
+
 def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
     if not rows:
         print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
@@ -631,6 +641,7 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
             "count_for_avg": 0,
             "sum": 0,
             "excluded_low_price": 0,
+            "missing_price_count": 0,
         }
     )
 
@@ -644,13 +655,12 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
         grouped[key]["count_total"] += 1
 
         if price is None:
-            continue
-        if price < min_price_for_avg:
+            grouped[key]["missing_price_count"] += 1
+        elif price < min_price_for_avg:
             grouped[key]["excluded_low_price"] += 1
-            continue
-
-        grouped[key]["count_for_avg"] += 1
-        grouped[key]["sum"] += price
+        else:
+            grouped[key]["count_for_avg"] += 1
+            grouped[key]["sum"] += price
 
     if not grouped:
         print("Keine Daten für die Auswertung verfügbar.")
@@ -678,9 +688,11 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
             else None
         )
         avg_txt = f"{avg:,.0f}".replace(",", " ") if avg is not None else "-"
-        excluded = stats.get("excluded_low_price", 0)
-        excluded_txt = "-" if not excluded else str(excluded)
-        count_txt = f"{stats['count_total']} ({excluded_txt})"
+        breakdown = _format_count_components(
+            stats.get("excluded_low_price", 0),
+            stats.get("missing_price_count", 0),
+        )
+        count_txt = f"{stats['count_total']} ({breakdown})"
         print(
             f"{make:15} {model[:25]:25} {fuel[:15]:15} "
             f"{count_txt:>12} {avg_txt:>12}"
@@ -697,25 +709,27 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
             "count_total": 0,
             "sum": 0,
             "excluded_low_price": 0,
+            "missing_price_count": 0,
+            "missing_year_count": 0,
         }
     )
     for row in rows:
         price = row.get("price")
         year = row.get("year")
-        if price is None or year is None:
-            continue
-        key = (
-            row.get("make") or "Unbekannt",
-            row.get("model") or "Unbekannt",
-            row.get("fuel") or "Unbekannt",
-            year,
-        )
+        make = row.get("make") or "Unbekannt"
+        model = row.get("model") or "Unbekannt"
+        fuel = row.get("fuel") or "Unbekannt"
+        key = (make, model, fuel, year)
         groups[key]["count_total"] += 1
-        if price < min_price_for_avg:
+        if price is None:
+            groups[key]["missing_price_count"] += 1
+        elif year is None:
+            groups[key]["missing_year_count"] += 1
+        elif price < min_price_for_avg:
             groups[key]["excluded_low_price"] += 1
-            continue
-        groups[key]["count"] += 1
-        groups[key]["sum"] += price
+        else:
+            groups[key]["count"] += 1
+            groups[key]["sum"] += price
     if not groups:
         print("Nicht genügend Daten mit Preis und Baujahr vorhanden.")
         return
@@ -724,26 +738,35 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
         f"{'Marke':15} {'Modell':25} {'Baujahr':>8} "
         f"{'Treibstoff':15} {'Anzahl':>12} {'Ø-Preis':>12}"
     )
-    sorted_groups = sorted(
-        groups.items(),
-        key=lambda item: (
-            item[0][0] or "",
-            item[0][1] or "",
-            item[0][3],
-            item[0][2] or "",
-        ),
-    )
+    def _sort_group(item):
+        make, model, fuel, year = item[0]
+        year_sort = (year is None, year if isinstance(year, int) else year or 0)
+        return (
+            make or "",
+            model or "",
+            year_sort,
+            fuel or "",
+        )
+
+    sorted_groups = sorted(groups.items(), key=_sort_group)
     for (make, model, fuel, year), stats in sorted_groups:
         if stats["count"] < min_listings:
             continue
-        avg_price = stats["sum"] / stats["count"]
-        avg_txt = f"{avg_price:,.0f}".replace(",", " ")
-        excluded = stats.get("excluded_low_price", 0)
-        excluded_txt = "-" if not excluded else str(excluded)
+        if stats["count"]:
+            avg_price = stats["sum"] / stats["count"]
+            avg_txt = f"{avg_price:,.0f}".replace(",", " ")
+        else:
+            avg_txt = "-"
+        breakdown = _format_count_components(
+            stats.get("excluded_low_price", 0),
+            stats.get("missing_price_count", 0),
+            stats.get("missing_year_count", 0),
+        )
         count_total = stats["count_total"]
-        count_txt = f"{count_total} ({excluded_txt})"
+        count_txt = f"{count_total} ({breakdown})"
+        year_txt = year if year is not None else "-"
         print(
-            f"{make:15} {model[:25]:25} {year:>8} {fuel[:15]:15} "
+            f"{make:15} {model[:25]:25} {year_txt:>8} {fuel[:15]:15} "
             f"{count_txt:>12} {avg_txt:>12}"
         )
 
