@@ -331,16 +331,23 @@ def settings_menu():
         choice = input("Deine Auswahl: ").strip()
         if choice == "1":
             new_url = input(
-                "Neue Basis-URL mit {search_term} und {page_num} (Enter = unverändert): "
+                "Neue Basis-URL mit {search_term} und {page_num} "
+                "(Enter = unverändert, 'standard' = Standard wiederherstellen): "
             ).strip()
-            if new_url:
-                try:
-                    normalized = build_base_url_template(new_url)
-                    _update_settings(base_url_template=normalized)
-                    print("✅ Basis-URL gespeichert.")
-                except ValueError as exc:
-                    print(f"⚠️  {exc}")
+            if not new_url:
+                continue
+            if new_url.lower() in {"standard", "default", "reset", "std"}:
+                _update_settings(base_url_template=DEFAULT_BASE_URL_TEMPLATE)
+                print("✅ Basis-URL auf Standard zurückgesetzt.")
                 time.sleep(1.2)
+                continue
+            try:
+                normalized = build_base_url_template(new_url)
+                _update_settings(base_url_template=normalized)
+                print("✅ Basis-URL gespeichert.")
+            except ValueError as exc:
+                print(f"⚠️  {exc}")
+            time.sleep(1.2)
         elif choice == "2":
             current_label = settings.search_term or "alle"
             new_term = input(
