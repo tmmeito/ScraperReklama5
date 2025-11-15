@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from datetime import datetime, timedelta
 from collections import defaultdict
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 from urllib import request as urllib_request
 from urllib import error as urllib_error
 from urllib.parse import urlsplit, urlunsplit, quote_plus
@@ -43,6 +43,15 @@ CSV_FIELDNAMES = [
 ]
 
 INLINE_PROGRESS_SYMBOL = "•"
+
+STATUS_NEW = "new"
+STATUS_CHANGED = "changed"
+STATUS_UNCHANGED = "unchanged"
+STATUS_LABELS = {
+    STATUS_NEW: "neu",
+    STATUS_CHANGED: "geändert",
+    STATUS_UNCHANGED: "unverändert",
+}
 
 DETAIL_FIELD_MAP = {
     "марка": "make",
@@ -85,6 +94,7 @@ class ScraperConfig:
     csv_filename: str = OUTPUT_CSV
     base_url_template: Optional[str] = None
     db_path: Optional[str] = None
+    skip_unchanged: bool = False
 
 
 @dataclass
@@ -99,6 +109,7 @@ class UserSettings:
     detail_rate_limit_permits: Optional[int] = None
     csv_filename: str = OUTPUT_CSV
     db_path: Optional[str] = None
+    skip_unchanged: bool = False
 
 
 def _serialize_user_settings(settings: UserSettings):
@@ -173,6 +184,7 @@ def load_user_settings():
         detail_rate_limit_permits=rate_limit,
         csv_filename=raw.get("csv_filename", OUTPUT_CSV),
         db_path=raw.get("db_path") or None,
+        skip_unchanged=bool(raw.get("skip_unchanged", False)),
     )
     return settings
 
@@ -303,6 +315,7 @@ def settings_menu():
             else f"CSV → {settings.csv_filename}"
         )
         detail_label = "aktiv" if settings.enable_detail_capture else "aus"
+        unchanged_label = "überspringen" if settings.skip_unchanged else "markieren"
         print_section("⚙️  Standard-Einstellungen")
         print(f"   • Basis-URL.........: {shorten_url(settings.base_url_template)}")
         print(f"   • Suchbegriff.......: {settings.search_term or 'alle'}")
@@ -314,6 +327,7 @@ def settings_menu():
         rate_label = settings.detail_rate_limit_permits or "aus"
         print(f"   • Detail-Rate-Limit.: {rate_label}")
         print(f"   • Speicherung.......: {storage_label}")
+        print(f"   • Unveränderte......: {unchanged_label}")
         print()
         print("  [1] 🔗 Basis-URL anpassen")
         print("  [2] 🔎 Suchbegriff festlegen")
@@ -325,6 +339,7 @@ def settings_menu():
         print("  [8] 🚦 Detail-Rate-Limit setzen")
         print("  [9] 💾 CSV-Datei ändern")
         print("  [10] 🗄️  SQLite-Datei festlegen/entfernen")
+        print("  [11] ♻️  Umgang mit unveränderten Einträgen")
         print()
         print("  [0] ↩️  Zurück zum Hauptmenü")
         print()
@@ -464,6 +479,17 @@ def settings_menu():
                 _update_settings(db_path=None)
             elif new_db:
                 _update_settings(db_path=new_db)
+        elif choice == "11":
+            current_mode = "überspringen" if settings.skip_unchanged else "markieren"
+            prompt = (
+                "Unveränderte Einträge (Enter = {current}, 'skip' = überspringen, "
+                "'mark' = nur markieren): "
+            ).format(current=current_mode)
+            new_mode = input(prompt).strip().lower()
+            if new_mode in {"skip", "überspringen", "u"}:
+                _update_settings(skip_unchanged=True)
+            elif new_mode in {"mark", "m", "anzeigen"}:
+                _update_settings(skip_unchanged=False)
         elif choice == "0":
             return
         else:
@@ -769,6 +795,61 @@ def enrich_listings_with_details(
             if value in (None, ""):
                 continue
             listing[key] = value
+
+
+def _normalize_listing_payload_for_hash(listing):
+    normalized = {}
+    for name in CSV_FIELDNAMES:
+        value = listing.get(name)
+        if isinstance(value, bool):
+            value = int(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            value = stripped or None
+        if name == "id" and value is not None:
+            value = str(value)
+        normalized[name] = value
+    return normalized
+
+
+def classify_listing_status(listings, db_connection):
+    """Annotate ``listings`` with a status compared to the SQLite store."""
+
+    status_map: Dict[str, Dict[str, object]] = {}
+    if not listings:
+        return status_map
+
+    fallback_counter = 0
+    for listing in listings:
+        fallback_counter += 1
+        raw_id = listing.get("id")
+        normalized_id = str(raw_id) if raw_id not in (None, "") else None
+        cache_key = normalized_id or f"tmp-{fallback_counter}"
+        listing_status = STATUS_NEW
+        changes: Dict[str, Dict[str, object]] = {}
+
+        if db_connection is not None and normalized_id:
+            normalized_payload = _normalize_listing_payload_for_hash(listing)
+            existing = sqlite_store.fetch_listing_by_id(db_connection, normalized_id)
+            if existing is None:
+                listing_status = STATUS_NEW
+            else:
+                listing_hash = sqlite_store.calculate_listing_hash(normalized_payload)
+                for field in ("price", "km", "kw", "ps"):
+                    new_value = normalized_payload.get(field)
+                    old_value = existing.get(field)
+                    if new_value != old_value:
+                        changes[field] = {"old": old_value, "new": new_value}
+                if existing.get("hash") != listing_hash:
+                    changes["hash"] = {
+                        "old": existing.get("hash"),
+                        "new": listing_hash,
+                    }
+                listing_status = STATUS_CHANGED if changes else STATUS_UNCHANGED
+        listing["_status"] = listing_status
+        listing["_status_changes"] = changes
+        status_map[cache_key] = {"status": listing_status, "changes": changes}
+    return status_map
 
 
 def fetch_detail_attributes(url, retries=3, backoff_seconds=2):
@@ -1415,6 +1496,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         detail_worker_count = 1
         detail_rate_limit_permits = None
 
+    skip_unchanged = bool(getattr(config, "skip_unchanged", False))
+
     if csv_filename and os.path.isfile(csv_filename):
         os.remove(csv_filename)
 
@@ -1422,6 +1505,12 @@ def run_scraper_flow_from_config(config, *, interactive=True):
     total_saved = 0
     seen_ids = set()
     duplicates_skipped_total = 0
+    status_totals = {
+        STATUS_NEW: 0,
+        STATUS_CHANGED: 0,
+        STATUS_UNCHANGED: 0,
+    }
+    skipped_unchanged_total = 0
 
     try:
         for page in range(1, 200):
@@ -1473,19 +1562,52 @@ def run_scraper_flow_from_config(config, *, interactive=True):
                 print(f"↺ {duplicates_skipped_page} Duplikate übersprungen")
             print(INLINE_PROGRESS_SYMBOL * found_on_page)
 
+            classify_listing_status(eligible_listings, db_connection)
+            page_status_counts = {
+                STATUS_NEW: 0,
+                STATUS_CHANGED: 0,
+                STATUS_UNCHANGED: 0,
+            }
+            for listing in eligible_listings:
+                status_value = listing.get("_status") or STATUS_NEW
+                page_status_counts[status_value] = page_status_counts.get(status_value, 0) + 1
+            for key, value in page_status_counts.items():
+                status_totals[key] = status_totals.get(key, 0) + value
+            if skip_unchanged:
+                skipped_unchanged_total += page_status_counts.get(STATUS_UNCHANGED, 0)
+
+            print(
+                "   Status: "
+                + " | ".join(
+                    f"{STATUS_LABELS[key]} {page_status_counts.get(key, 0):02d}"
+                    for key in (STATUS_NEW, STATUS_CHANGED, STATUS_UNCHANGED)
+                )
+            )
+            if page_status_counts.get(STATUS_UNCHANGED, 0):
+                hint = "übersprungen" if skip_unchanged else "markiert"
+                print(
+                    f"   ↷ {page_status_counts[STATUS_UNCHANGED]:02d} unveränderte Einträge {hint}"
+                )
+
+            detail_candidates = [
+                item
+                for item in eligible_listings
+                if (item.get("_status") or STATUS_NEW) != STATUS_UNCHANGED
+            ]
+
             progress_callback = None
             progress_finalize = None
-            if enable_detail_capture and found_on_page:
+            if enable_detail_capture and detail_candidates:
                 (
                     progress_callback,
                     progress_finalize,
-                ) = build_inline_progress_printer(found_on_page)
+                ) = build_inline_progress_printer(len(detail_candidates))
 
             enrich_listings_with_details(
-                eligible_listings,
+                detail_candidates,
                 enable_detail_capture,
                 delay_range=detail_delay_range,
-                max_items=remaining_limit if limit is not None else None,
+                max_items=None,
                 progress_callback=progress_callback,
                 max_workers=detail_worker_count,
                 rate_limit_permits=detail_rate_limit_permits,
@@ -1493,6 +1615,10 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
             if progress_finalize:
                 progress_finalize()
+
+            listings_to_persist = (
+                detail_candidates if skip_unchanged else eligible_listings
+            )
 
             save_kwargs = {
                 "limit": remaining_limit,
@@ -1502,7 +1628,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
             if db_connection is not None:
                 save_kwargs["db_connection"] = db_connection
             saved_in_page = save_raw_filtered(
-                eligible_listings,
+                listings_to_persist,
                 days,
                 **save_kwargs,
             )
@@ -1540,7 +1666,12 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         f"   • Geprüfte Einträge : {total_found}\n"
         f"   • Gespeicherte Einträge: {total_saved}\n"
         f"   • Übersprungene Duplikate: {duplicates_skipped_total}\n"
+        f"   • Neue Inserate.....: {status_totals.get(STATUS_NEW, 0)}\n"
+        f"   • Geänderte Inserate: {status_totals.get(STATUS_CHANGED, 0)}\n"
+        f"   • Unveränderte......: {status_totals.get(STATUS_UNCHANGED, 0)}\n"
     )
+    if skip_unchanged:
+        print(f"   • Übersprungene unveränderte Einträge: {skipped_unchanged_total}")
 
     if csv_filename:
         aggregate_data(csv_filename=csv_filename)
@@ -1560,6 +1691,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         "total_saved": total_saved,
         "csv_filename": csv_filename,
         "db_path": db_path,
+        "status_counts": status_totals,
+        "skipped_unchanged": skipped_unchanged_total,
     }
 
 
@@ -1573,6 +1706,7 @@ def _format_settings_summary(settings):
     )
     detail_label = "aktiv" if settings.enable_detail_capture else "aus"
     rate_label = settings.detail_rate_limit_permits or "aus"
+    unchanged_label = "überspringen" if settings.skip_unchanged else "markieren"
     lines = [
         f"   • Basis-URL.........: {shorten_url(settings.base_url_template)}",
         f"   • Suchbegriff.......: {settings.search_term or 'alle'}",
@@ -1583,6 +1717,7 @@ def _format_settings_summary(settings):
         f"   • Detail-Pause......: {delay_label}",
         f"   • Detail-Rate-Limit.: {rate_label}",
         f"   • Speicherung.......: {storage_label}",
+        f"   • Unveränderte......: {unchanged_label}",
     ]
     return "\n".join(lines)
 
@@ -1607,6 +1742,7 @@ def _build_config_from_settings(settings):
         csv_filename=csv_filename,
         base_url_template=base_url,
         db_path=settings.db_path,
+        skip_unchanged=settings.skip_unchanged,
     )
 
 
@@ -1656,6 +1792,7 @@ def _prompt_temporary_overrides(settings):
         print("  [r] 🚦 Detail-Rate-Limit")
         print("  [c] 💾 CSV-Datei")
         print("  [x] 🗄️  SQLite-Datei")
+        print("  [u] ♻️  Umgang mit unveränderten Einträgen")
         print()
         choice = input("Feld wählen ([Enter] fertig, q = Abbrechen): ").strip().lower()
         if not choice:
@@ -1733,6 +1870,15 @@ def _prompt_temporary_overrides(settings):
         elif choice == "x":
             db_path = input("SQLite-Datei (leer = deaktivieren): ").strip()
             overrides["db_path"] = db_path or None
+        elif choice == "u":
+            current_label = "überspringen" if working_settings.skip_unchanged else "markieren"
+            new_mode = input(
+                f"Unveränderte Einträge (Enter = {current_label}, 'skip'/'mark'): "
+            ).strip().lower()
+            if new_mode in {"skip", "überspringen", "u"}:
+                overrides["skip_unchanged"] = True
+            elif new_mode in {"mark", "m", "anzeigen"}:
+                overrides["skip_unchanged"] = False
         else:
             print("⚠️  Unbekannte Auswahl.")
             time.sleep(1)
@@ -1851,6 +1997,11 @@ def build_cli_parser():
         dest="base_url",
         help="Eigene Such-URL mit Platzhaltern {search_term} und {page_num}",
     )
+    parser.add_argument(
+        "--skip-unchanged",
+        action="store_true",
+        help="Unveränderte Einträge nicht erneut speichern",
+    )
     return parser
 
 
@@ -1894,6 +2045,7 @@ def run_cli_from_args(args):
         csv_filename=csv_filename,
         base_url_template=base_url_template,
         db_path=db_path,
+        skip_unchanged=bool(args.skip_unchanged),
     )
     result = run_scraper_flow_from_config(config, interactive=False)
     print_section("✅ Automatischer Lauf abgeschlossen")
@@ -1906,6 +2058,16 @@ def run_cli_from_args(args):
         f"   • {storage_info}\n"
         f"   • Gespeicherte Einträge: {result['total_saved']}"
     )
+    status_counts = result.get("status_counts") or {}
+    if status_counts:
+        print(
+            f"   • Neue Inserate.....: {status_counts.get(STATUS_NEW, 0)}\n"
+            f"   • Geänderte Inserate: {status_counts.get(STATUS_CHANGED, 0)}\n"
+            f"   • Unveränderte......: {status_counts.get(STATUS_UNCHANGED, 0)}"
+        )
+        skipped = result.get("skipped_unchanged", 0)
+        if skipped:
+            print(f"   • Übersprungene unveränderte Einträge: {skipped}")
     return result
 
 
