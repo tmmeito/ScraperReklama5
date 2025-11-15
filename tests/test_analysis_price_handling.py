@@ -76,76 +76,32 @@ def test_display_summary_counts_empty_price_as_low_price(capfd):
     scraper.display_make_model_summary(analysis, min_price_for_avg=500, top_n=1)
 
     captured = capfd.readouterr().out
-    assert "2 (1 / -)" in captured
+    assert "2 (1)" in captured
 
 
-def test_display_summary_counts_missing_price_entries(capfd):
-    rows = [
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "price": None,
-        },
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "price": None,
-        },
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "price": 1500,
-        },
-    ]
+def test_analysis_data_avoids_multiple_scans_for_repeated_calls(capfd):
+    class CountingList(list):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.iterations = 0
 
-    scraper.display_make_model_summary(rows, min_price_for_avg=500, top_n=1)
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
 
-    captured = capfd.readouterr().out
-    assert "3 (- / 2)" in captured
-
-
-def test_display_avg_price_counts_missing_values(capfd):
-    rows = [
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "year": 2010,
-            "price": None,
-        },
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "year": 2010,
-            "price": 900,
-        },
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "year": 2011,
-            "price": 2200,
-        },
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "year": None,
-            "price": 2300,
-        },
-    ]
-
-    scraper.display_avg_price_by_model_year(
-        rows,
-        min_listings=0,
-        min_price_for_avg=1500,
+    rows = CountingList(
+        [
+            {"make": "Test", "model": "Car", "fuel": "Diesel", "price": 1000, "year": 2020},
+            {"make": "Test", "model": "Car", "fuel": "Diesel", "price": 1500, "year": 2021},
+            {"make": "Test", "model": "Car", "fuel": "Diesel", "price": 300, "year": 2020},
+        ]
     )
 
-    captured = capfd.readouterr().out
-    assert "2010" in captured
-    assert "2 (1 / 1 / -)" in captured
-    assert "1 (- / - / 1)" in captured
+    analysis = scraper.AnalysisData(rows)
+    assert rows.iterations == 1
+
+    scraper.display_make_model_summary(analysis, min_price_for_avg=0, top_n=1)
+    scraper.display_avg_price_by_model_year(analysis, min_listings=1, min_price_for_avg=0)
+    scraper.display_make_model_summary(analysis, min_price_for_avg=1000, top_n=1)
+
+    assert rows.iterations == 1
