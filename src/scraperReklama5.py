@@ -21,6 +21,8 @@ from urllib import request as urllib_request
 from urllib import error as urllib_error
 from urllib.parse import urlsplit, urlunsplit, quote_plus
 
+from storage import sqlite_store
+
 from bs4 import BeautifulSoup
 
 try:
@@ -75,6 +77,7 @@ class ScraperConfig:
     detail_rate_limit_permits: Optional[int] = None
     csv_filename: str = OUTPUT_CSV
     base_url_template: Optional[str] = None
+    db_path: Optional[str] = None
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -139,6 +142,19 @@ def prompt_csv_filename(default_name=OUTPUT_CSV):
             f"⚠️  Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen "
             "oder einen anderen Dateinamen angeben."
         )
+
+
+def prompt_db_path(default_path=sqlite_store.DEFAULT_DB_PATH):
+    prompt = (
+        "SQLite-Datenbank zum Speichern verwenden? "
+        f"(Enter = CSV, d = {default_path}): "
+    )
+    user_input = input(prompt).strip()
+    if not user_input:
+        return None
+    if user_input.lower() == "d" and default_path:
+        return default_path
+    return user_input
 
 
 def _split_query_pairs(raw_query):
@@ -632,20 +648,36 @@ def is_older_than_days(date_text, days, promoted):
         return False
     return dt < datetime.now() - timedelta(days=days)
 
-def save_raw_filtered(rows, days, limit=None, csv_filename=OUTPUT_CSV):
-    file_exists = os.path.isfile(csv_filename)
-    saved = 0
-    with open(csv_filename, mode="a", newline="", encoding="utf-8") as f:
+def save_raw_filtered(
+    rows,
+    days,
+    limit=None,
+    csv_filename=OUTPUT_CSV,
+    *,
+    db_connection=None,
+):
+    saved_rows = []
+    for r in rows:
+        if limit is not None and len(saved_rows) >= limit:
+            break
+        if r["date"] and is_within_days(r["date"], days, r["promoted"]):
+            saved_rows.append(r)
+
+    if not saved_rows:
+        return 0
+
+    if db_connection is not None:
+        sqlite_store.upsert_many(db_connection, saved_rows, CSV_FIELDNAMES)
+        return len(saved_rows)
+
+    target_csv = csv_filename or OUTPUT_CSV
+    file_exists = os.path.isfile(target_csv)
+    with open(target_csv, mode="a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
         if not file_exists:
             writer.writeheader()
-        for r in rows:
-            if limit is not None and saved >= limit:
-                break
-            if r["date"] and is_within_days(r["date"], days, r["promoted"]):
-                writer.writerow(r)
-                saved += 1
-    return saved
+        writer.writerows(saved_rows)
+    return len(saved_rows)
 
 def aggregate_data(csv_filename=None, output_json=None):
     if not csv_filename:
@@ -977,7 +1009,22 @@ def run_scraper_flow_from_config(config, *, interactive=True):
     if config.base_url_template:
         BASE_URL_TEMPLATE = config.base_url_template
 
-    csv_filename = config.csv_filename or OUTPUT_CSV
+    db_path = (config.db_path or "").strip() or None
+    db_connection = None
+    csv_filename = None
+    if db_path:
+        try:
+            db_connection = sqlite_store.open_database(db_path)
+            sqlite_store.init_schema(db_connection, CSV_FIELDNAMES)
+        except Exception as exc:
+            print("⚠️  SQLite konnte nicht initialisiert werden. Nutze CSV-Datei.")
+            print(f"    Grund: {exc}")
+            db_connection = None
+            db_path = None
+    if not db_path:
+        csv_filename = config.csv_filename or OUTPUT_CSV
+        if os.path.isfile(csv_filename):
+            os.remove(csv_filename)
     search_term = config.search_term or ""
     try:
         days_value = int(config.days)
@@ -1026,99 +1073,116 @@ def run_scraper_flow_from_config(config, *, interactive=True):
     seen_ids = set()
     duplicates_skipped_total = 0
 
-    for page in range(1, 200):
-        html = fetch_listing_page(search_term, page)
-        if not html:
-            print()
-            print(f"⚠️  Seite {page} konnte nicht geladen werden. Stop.")
-            break
-        listings = parse_listing(html)
-
-        if not listings:
-            print()
-            print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
-            break
-
-        eligible_listings = [
-            item for item in listings
-            if item["date"] and is_within_days(item["date"], days, item["promoted"])
-        ]
-
-        duplicates_skipped_page = 0
-        deduplicated = []
-        for item in eligible_listings:
-            item_id = item.get("id")
-            if item_id and item_id in seen_ids:
-                duplicates_skipped_page += 1
-                continue
-            if item_id:
-                seen_ids.add(item_id)
-            deduplicated.append(item)
-        eligible_listings = deduplicated
-        duplicates_skipped_total += duplicates_skipped_page
-
-        remaining_limit = None
-        if limit is not None:
-            remaining_limit = max(0, limit - total_saved)
-            if remaining_limit == 0:
-                print(f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop.")
+    try:
+        for page in range(1, 200):
+            html = fetch_listing_page(search_term, page)
+            if not html:
+                print()
+                print(f"⚠️  Seite {page} konnte nicht geladen werden. Stop.")
                 break
-            eligible_listings = eligible_listings[:remaining_limit]
+            listings = parse_listing(html)
 
-        found_on_page = len(eligible_listings)
-        total_found += found_on_page
+            if not listings:
+                print()
+                print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
+                break
 
-        print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
-        if duplicates_skipped_page:
-            print(f"↺ {duplicates_skipped_page} Duplikate übersprungen")
-        print(INLINE_PROGRESS_SYMBOL * found_on_page)
+            eligible_listings = [
+                item for item in listings
+                if item["date"] and is_within_days(item["date"], days, item["promoted"])
+            ]
 
-        progress_callback = None
-        progress_finalize = None
-        if enable_detail_capture and found_on_page:
-            progress_callback, progress_finalize = build_inline_progress_printer(found_on_page)
+            duplicates_skipped_page = 0
+            deduplicated = []
+            for item in eligible_listings:
+                item_id = item.get("id")
+                if item_id and item_id in seen_ids:
+                    duplicates_skipped_page += 1
+                    continue
+                if item_id:
+                    seen_ids.add(item_id)
+                deduplicated.append(item)
+            eligible_listings = deduplicated
+            duplicates_skipped_total += duplicates_skipped_page
 
-        enrich_listings_with_details(
-            eligible_listings,
-            enable_detail_capture,
-            delay_range=detail_delay_range,
-            max_items=remaining_limit if limit is not None else None,
-            progress_callback=progress_callback,
-            max_workers=detail_worker_count,
-            rate_limit_permits=detail_rate_limit_permits,
-        )
+            remaining_limit = None
+            if limit is not None:
+                remaining_limit = max(0, limit - total_saved)
+                if remaining_limit == 0:
+                    print(
+                        f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop."
+                    )
+                    break
+                eligible_listings = eligible_listings[:remaining_limit]
 
-        if progress_finalize:
-            progress_finalize()
+            found_on_page = len(eligible_listings)
+            total_found += found_on_page
 
-        saved_in_page = save_raw_filtered(
-            eligible_listings,
-            days,
-            limit=remaining_limit,
-            csv_filename=csv_filename,
-        )
-        total_saved += saved_in_page
-        print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
-        print()
+            print(f"Lade Seite {page:02d} ({found_on_page:02d} Treffer)")
+            if duplicates_skipped_page:
+                print(f"↺ {duplicates_skipped_page} Duplikate übersprungen")
+            print(INLINE_PROGRESS_SYMBOL * found_on_page)
 
-        if limit is not None and total_saved >= limit:
-            print(f"ℹ️  Maximalanzahl von {limit} Einträgen erreicht (aktuell {total_saved}). Stop.")
-            break
+            progress_callback = None
+            progress_finalize = None
+            if enable_detail_capture and found_on_page:
+                (
+                    progress_callback,
+                    progress_finalize,
+                ) = build_inline_progress_printer(found_on_page)
 
-        stop = False
-        for item in listings:
-            if item["date"] and is_older_than_days(item["date"], days, item["promoted"]):
+            enrich_listings_with_details(
+                eligible_listings,
+                enable_detail_capture,
+                delay_range=detail_delay_range,
+                max_items=remaining_limit if limit is not None else None,
+                progress_callback=progress_callback,
+                max_workers=detail_worker_count,
+                rate_limit_permits=detail_rate_limit_permits,
+            )
+
+            if progress_finalize:
+                progress_finalize()
+
+            save_kwargs = {
+                "limit": remaining_limit,
+                "csv_filename": csv_filename,
+            }
+            if db_connection is not None:
+                save_kwargs["db_connection"] = db_connection
+            saved_in_page = save_raw_filtered(
+                eligible_listings,
+                days,
+                **save_kwargs,
+            )
+            total_saved += saved_in_page
+            print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
+            print()
+
+            if limit is not None and total_saved >= limit:
                 print(
-                    f"ℹ️  Anzeige älter als {days} Tage gefunden "
-                    f"(ID {item['id']}) auf Seite {page}. Stop."
+                    "ℹ️  Maximalanzahl von "
+                    f"{limit} Einträgen erreicht (aktuell {total_saved}). Stop."
                 )
-                stop = True
                 break
-        if stop:
-            break
 
-        sleep_time = random.uniform(2, 4)
-        time.sleep(sleep_time)
+            stop = False
+            for item in listings:
+                if item["date"] and is_older_than_days(item["date"], days, item["promoted"]):
+                    print(
+                        f"ℹ️  Anzeige älter als {days} Tage gefunden "
+                        f"(ID {item['id']}) auf Seite {page}. Stop."
+                    )
+                    stop = True
+                    break
+            if stop:
+                break
+
+            sleep_time = random.uniform(2, 4)
+            time.sleep(sleep_time)
+    finally:
+        if db_connection is not None:
+            db_connection.close()
 
     print_section("📦 Zusammenfassung")
     print(
@@ -1127,13 +1191,18 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         f"   • Übersprungene Duplikate: {duplicates_skipped_total}\n"
     )
 
-    aggregate_data(csv_filename=csv_filename)
+    if csv_filename:
+        aggregate_data(csv_filename=csv_filename)
     if interactive:
-        return analysis_menu(csv_filename)
+        if csv_filename:
+            return analysis_menu(csv_filename)
+        print("ℹ️  Analysefunktionen für SQLite-Datenbanken folgen später.")
+        return "main"
     return {
         "total_found": total_found,
         "total_saved": total_saved,
         "csv_filename": csv_filename,
+        "db_path": db_path,
     }
 
 def run_scraper_flow():
@@ -1252,6 +1321,8 @@ def run_scraper_flow():
             except ValueError:
                 detail_rate_limit_permits = None
 
+    db_path = prompt_db_path()
+
     config = ScraperConfig(
         search_term=search_term,
         days=days,
@@ -1260,8 +1331,9 @@ def run_scraper_flow():
         detail_delay_range=detail_delay_range,
         detail_worker_count=detail_worker_count,
         detail_rate_limit_permits=detail_rate_limit_permits,
-        csv_filename=OUTPUT_CSV,
+        csv_filename=OUTPUT_CSV if not db_path else None,
         base_url_template=BASE_URL_TEMPLATE,
+        db_path=db_path,
     )
     return run_scraper_flow_from_config(config)
 
@@ -1334,6 +1406,11 @@ def build_cli_parser():
         help="Zieldatei für die exportierten Rohdaten",
     )
     parser.add_argument(
+        "--db",
+        dest="db_path",
+        help="SQLite-Datenbankdatei statt CSV verwenden",
+    )
+    parser.add_argument(
         "--base-url",
         dest="base_url",
         help="Eigene Such-URL mit Platzhaltern {search_term} und {page_num}",
@@ -1342,7 +1419,10 @@ def build_cli_parser():
 
 
 def run_cli_from_args(args):
-    csv_filename = args.csv_filename or OUTPUT_CSV
+    db_path = (args.db_path or "").strip() or None
+    if db_path and args.csv_filename:
+        print("ℹ️  --db angegeben – CSV-Export wird bevorzugt und CSV ignoriert.")
+    csv_filename = None if db_path else (args.csv_filename or OUTPUT_CSV)
 
     detail_delay_range = None
     detail_worker_count = args.details_workers or 3
@@ -1377,11 +1457,17 @@ def run_cli_from_args(args):
         detail_rate_limit_permits=detail_rate_limit,
         csv_filename=csv_filename,
         base_url_template=base_url_template,
+        db_path=db_path,
     )
     result = run_scraper_flow_from_config(config, interactive=False)
     print_section("✅ Automatischer Lauf abgeschlossen")
+    storage_info = (
+        f"SQLite-Datei: {result['db_path']}"
+        if result.get("db_path")
+        else f"CSV-Datei: {result['csv_filename']}"
+    )
     print(
-        f"   • CSV-Datei: {result['csv_filename']}\n"
+        f"   • {storage_info}\n"
         f"   • Gespeicherte Einträge: {result['total_saved']}"
     )
     return result
