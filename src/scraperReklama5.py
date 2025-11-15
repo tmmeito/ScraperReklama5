@@ -1263,7 +1263,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         detail_worker_count = 1
         detail_rate_limit_permits = None
 
-    if os.path.isfile(csv_filename):
+    if csv_filename and os.path.isfile(csv_filename):
         os.remove(csv_filename)
 
     total_found = 0
