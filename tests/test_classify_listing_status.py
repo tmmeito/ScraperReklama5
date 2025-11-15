@@ -99,7 +99,7 @@ def test_classify_listing_status_detects_real_numeric_changes():
     }
 
 
-def test_classify_listing_status_ignores_relative_date_differences():
+def test_classify_listing_status_ignores_minor_date_drift():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     sqlite_store.init_schema(conn, CSV_FIELDNAMES)
@@ -107,9 +107,47 @@ def test_classify_listing_status_ignores_relative_date_differences():
     stored_listing = build_listing(date="2024-05-01 12:00")
     sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
 
-    followup_listing = build_listing(date="2024-05-02 12:00")
+    followup_listing = build_listing(date="2024-05-01 12:30")
 
     classify_listing_status([followup_listing], conn)
 
     assert followup_listing["_status"] == STATUS_UNCHANGED
     assert followup_listing["_status_changes"] == {}
+
+
+def test_classify_listing_status_flags_large_date_changes():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
+
+    stored_listing = build_listing(date="2024-05-01 12:00")
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
+
+    followup_listing = build_listing(date="2024-05-03 13:00")
+
+    classify_listing_status([followup_listing], conn)
+
+    assert followup_listing["_status"] != STATUS_UNCHANGED
+    assert followup_listing["_status_changes"].get("date") == {
+        "old": "2024-05-01 12:00",
+        "new": "2024-05-03 13:00",
+    }
+
+
+def test_classify_listing_status_detects_city_changes():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
+
+    stored_listing = build_listing(city="Skopje")
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
+
+    followup_listing = build_listing(city="Bitola")
+
+    classify_listing_status([followup_listing], conn)
+
+    assert followup_listing["_status"] != STATUS_UNCHANGED
+    assert followup_listing["_status_changes"].get("city") == {
+        "old": "Skopje",
+        "new": "Bitola",
+    }
