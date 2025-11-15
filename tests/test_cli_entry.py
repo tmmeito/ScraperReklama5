@@ -36,16 +36,31 @@ def test_cli_entry_triggers_non_interactive_run(monkeypatch, tmp_path):
 
     saved = {}
 
-    def fake_save(rows, days, limit=None, csv_filename=None, pre_filtered=False):
+    def fake_save(
+        rows,
+        days,
+        limit=None,
+        csv_filename=None,
+        pre_filtered=False,
+        *,
+        db_connection=None,
+    ):
         saved["rows"] = rows
         saved["days"] = days
         saved["limit"] = limit
         saved["csv"] = csv_filename
         saved["pre_filtered"] = pre_filtered
+        saved["db_connection"] = db_connection
         return len(rows)
 
     monkeypatch.setattr(scraper, "save_raw_filtered", fake_save)
-    monkeypatch.setattr(scraper, "aggregate_data", lambda **_: {})
+    aggregate_calls = []
+
+    def fake_aggregate(*args, **kwargs):
+        aggregate_calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(scraper, "aggregate_data", fake_aggregate)
 
     analysis_called = False
 
@@ -57,7 +72,7 @@ def test_cli_entry_triggers_non_interactive_run(monkeypatch, tmp_path):
     monkeypatch.setattr(scraper, "analysis_menu", fake_analysis)
     monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
 
-    csv_path = tmp_path / "cars.csv"
+    db_path = tmp_path / "cars.db"
     result = scraper.main(
         [
             "--search",
@@ -69,17 +84,18 @@ def test_cli_entry_triggers_non_interactive_run(monkeypatch, tmp_path):
             "--details",
             "--details-delay",
             "0.5",
-            "--csv",
-            str(csv_path),
+            "--db",
+            str(db_path),
         ]
     )
 
-    assert saved["csv"] == str(csv_path)
+    assert saved["db_connection"] is not None
     assert saved["limit"] == 1
     assert result["total_saved"] == 1
-    assert result["csv_filename"] == str(csv_path)
+    assert result["db_path"] == str(db_path)
     assert analysis_called is False
     assert html_calls[0][0] == "aygo"
+    assert aggregate_calls and aggregate_calls[0].get("db_path") == str(db_path)
 
 
 def test_cli_details_delay_zero_propagates_none(monkeypatch, tmp_path):
@@ -117,12 +133,21 @@ def test_cli_details_delay_zero_propagates_none(monkeypatch, tmp_path):
 
     saved = {}
 
-    def fake_save(rows, days, limit=None, csv_filename=None, pre_filtered=False):
+    def fake_save(
+        rows,
+        days,
+        limit=None,
+        csv_filename=None,
+        pre_filtered=False,
+        *,
+        db_connection=None,
+    ):
         saved["rows"] = rows
         saved["days"] = days
         saved["limit"] = limit
         saved["csv"] = csv_filename
         saved["pre_filtered"] = pre_filtered
+        saved["db_connection"] = db_connection
         return len(rows)
 
     monkeypatch.setattr(scraper, "save_raw_filtered", fake_save)
@@ -130,7 +155,7 @@ def test_cli_details_delay_zero_propagates_none(monkeypatch, tmp_path):
     monkeypatch.setattr(scraper, "analysis_menu", lambda *_, **__: "exit")
     monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
 
-    csv_path = tmp_path / "cars.csv"
+    db_path = tmp_path / "cars.db"
     scraper.main(
         [
             "--search",
@@ -142,11 +167,12 @@ def test_cli_details_delay_zero_propagates_none(monkeypatch, tmp_path):
             "--details",
             "--details-delay",
             "0",
-            "--csv",
-            str(csv_path),
+            "--db",
+            str(db_path),
         ]
     )
 
     assert html_calls[0][0] == "aygo"
     assert captured_delay["enabled"] is True
     assert captured_delay["delay_range"] is None
+    assert saved["db_connection"] is not None
