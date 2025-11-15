@@ -42,6 +42,16 @@ CSV_FIELDNAMES = [
     "emission_class", "date", "city", "promoted"
 ]
 
+DETAIL_ONLY_FIELDS = [
+    "fuel",
+    "gearbox",
+    "body",
+    "color",
+    "registration",
+    "reg_until",
+    "emission_class",
+]
+
 INLINE_PROGRESS_SYMBOL = "•"
 
 STATUS_NEW = "new"
@@ -802,6 +812,12 @@ def classify_listing_status(listings, db_connection):
             if existing is None:
                 listing_status = STATUS_NEW
             else:
+                for detail_field in DETAIL_ONLY_FIELDS:
+                    new_value = normalized_payload.get(detail_field)
+                    if new_value in (None, ""):
+                        existing_value = existing.get(detail_field)
+                        if existing_value not in (None, ""):
+                            normalized_payload[detail_field] = existing_value
                 listing_hash = sqlite_store.calculate_listing_hash(normalized_payload)
                 for field in ("price", "km", "kw", "ps"):
                     new_value = normalized_payload.get(field)
