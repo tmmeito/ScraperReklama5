@@ -127,36 +127,16 @@ def shorten_url(url, max_length=48):
     return url[: max_length - 3] + "..."
 
 
-def prompt_csv_filename(default_name=OUTPUT_CSV):
-    while True:
-        user_input = input(
-            "CSV-Datei für Analyse verwenden "
-            f"(Enter = {default_name}, q = Abbruch): "
-        ).strip()
-        if not user_input:
-            candidate = default_name
-        elif user_input.lower() in {"q", "quit"}:
-            return None
-        else:
-            candidate = user_input
-        if os.path.isfile(candidate):
-            return candidate
-        print(
-            f"⚠️  Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen "
-            "oder einen anderen Dateinamen angeben."
-        )
-
-
 def prompt_db_path(default_path=sqlite_store.DEFAULT_DB_PATH):
     prompt = (
-        "SQLite-Datenbank zum Speichern verwenden? "
-        f"(Enter = CSV, d = {default_path}): "
+        "SQLite-Datenbank zum Speichern verwenden "
+        f"(Enter = {default_path}, q = Abbruch): "
     )
     user_input = input(prompt).strip()
     if not user_input:
-        return None
-    if user_input.lower() == "d" and default_path:
         return default_path
+    if user_input.lower() in {"q", "quit"}:
+        return None
     return user_input
 
 
@@ -178,29 +158,6 @@ def prompt_existing_db_path(default_path=sqlite_store.DEFAULT_DB_PATH):
         print(
             f"⚠️  Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen."
         )
-
-
-def prompt_analysis_source():
-    while True:
-        choice = (
-            input(
-                "Analysequelle wählen (Enter = SQLite, c = CSV, q = Abbruch): "
-            )
-            .strip()
-            .lower()
-        )
-        if not choice:
-            choice = "d"
-        if choice in {"q", "quit"}:
-            return None
-        if choice in {"c", "csv"}:
-            csv_filename = prompt_csv_filename()
-            if csv_filename:
-                return {"csv": csv_filename}
-            return None
-        db_path = prompt_existing_db_path()
-        if db_path:
-            return {"db": db_path}
 
 
 def _split_query_pairs(raw_query):
@@ -1694,7 +1651,7 @@ def main(argv=None):
         print_banner("SCRAPER FÜR reklama5.mk AUTOMOBILE")
         print("Was möchtest du tun?")
         print("  [1] 🔍 Neue Suche durchführen")
-        print("  [2] 📊 Analyse einer bestehenden CSV")
+        print("  [2] 📊 Analyse einer bestehenden SQLite-Datenbank")
         print()
         print("  [q] ❌ Programm beenden")
         print()
@@ -1704,14 +1661,12 @@ def main(argv=None):
             print("👋 Bis zum nächsten Mal!")
             break
         if start_choice == "2":
-            source = prompt_analysis_source()
-            if not source:
-                print("⚠️  Keine gültige Quelle angegeben. Zurück zum Hauptmenü …")
+            db_path = prompt_existing_db_path()
+            if not db_path:
+                print("ℹ️  Analyse abgebrochen. Zurück zum Hauptmenü …")
                 time.sleep(1.5)
                 continue
-            csv_filename = source.get("csv")
-            db_path = source.get("db")
-            outcome = analysis_menu(csv_filename or OUTPUT_CSV, db_path=db_path)
+            outcome = analysis_menu(db_path=db_path)
             if outcome == "main":
                 continue
             print("👋 Bis zum nächsten Mal!")
