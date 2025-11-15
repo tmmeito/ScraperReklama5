@@ -991,7 +991,6 @@ def analysis_menu(*, db_path):
             print("\n  [1] 📈 Häufigste Automarken und Modelle")
             print("  [2] 💶 Durchschnittspreise pro Modell/Baujahr")
             print("  [3] ⚙️  Einstellungen")
-            print("  [4] ↩️  Analyse beenden")
             print()
             print("  [0] 🔁 Zurück zum Hauptmenü")
             print()
@@ -1032,8 +1031,6 @@ def analysis_menu(*, db_path):
                 )
             elif choice == "0":
                 return "main"
-            elif choice == "4":
-                return "exit"
             else:
                 print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
     finally:
