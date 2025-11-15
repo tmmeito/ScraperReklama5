@@ -52,6 +52,25 @@ DETAIL_ONLY_FIELDS = [
     "emission_class",
 ]
 
+# Only a subset of fields is available from the overview pages without issuing
+# a detail request. Change detection must therefore rely exclusively on those
+# values to decide whether a listing already exists in the database and whether
+# a detail fetch is necessary.
+OVERVIEW_COMPARISON_FIELDS = [
+    "link",
+    "year",
+    "price",
+    "km",
+    "kw",
+    "ps",
+    "date",
+    "city",
+]
+
+STATUS_COMPARISON_FIELDS = list(OVERVIEW_COMPARISON_FIELDS)
+
+DATE_COMPARISON_TOLERANCE = timedelta(hours=1)
+
 INLINE_PROGRESS_SYMBOL = "•"
 
 STATUS_NEW = "new"
@@ -802,6 +821,25 @@ def _normalize_listing_payload_for_hash(listing):
     return normalized
 
 
+def _parse_iso_datetime(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _dates_equivalent(old_value, new_value):
+    old_dt = _parse_iso_datetime(old_value)
+    new_dt = _parse_iso_datetime(new_value)
+    if old_dt and new_dt:
+        return abs((new_dt - old_dt).total_seconds()) <= DATE_COMPARISON_TOLERANCE.total_seconds()
+    return old_value == new_value
+
+
 def classify_listing_status(listings, db_connection):
     """Annotate ``listings`` with a status compared to the SQLite store."""
 
@@ -824,26 +862,41 @@ def classify_listing_status(listings, db_connection):
             if existing is None:
                 listing_status = STATUS_NEW
             else:
-                fallback_fields = list(DETAIL_ONLY_FIELDS) + ["km", "kw", "ps", "year"]
+                fallback_fields = list(DETAIL_ONLY_FIELDS) + [
+                    "km",
+                    "kw",
+                    "ps",
+                    "year",
+                    "price",
+                    "city",
+                    "link",
+                ]
                 for detail_field in fallback_fields:
                     new_value = normalized_payload.get(detail_field)
                     if new_value in (None, ""):
                         existing_value = existing.get(detail_field)
                         if existing_value not in (None, ""):
                             normalized_payload[detail_field] = existing_value
+
                 listing_hash = sqlite_store.calculate_listing_hash(normalized_payload)
-                for field in ("price", "km", "kw", "ps"):
+                existing_hash = existing.get("hash")
+
+                for field in STATUS_COMPARISON_FIELDS:
                     new_value = normalized_payload.get(field)
                     if new_value in (None, ""):
                         continue
                     old_value = existing.get(field)
-                    if new_value != old_value:
+                    values_equal = (
+                        _dates_equivalent(old_value, new_value)
+                        if field == "date"
+                        else old_value == new_value
+                    )
+                    if not values_equal:
                         changes[field] = {"old": old_value, "new": new_value}
-                if existing.get("hash") != listing_hash:
-                    changes["hash"] = {
-                        "old": existing.get("hash"),
-                        "new": listing_hash,
-                    }
+
+                if changes and existing_hash != listing_hash:
+                    changes["hash"] = {"old": existing_hash, "new": listing_hash}
+
                 listing_status = STATUS_CHANGED if changes else STATUS_UNCHANGED
         listing["_status"] = listing_status
         listing["_status_changes"] = changes
