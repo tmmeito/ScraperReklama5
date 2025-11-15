@@ -8,6 +8,8 @@ import csv
 import json
 import warnings
 import socket
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -335,33 +337,91 @@ def parse_spec_line(text):
     return year, km, kw, ps
 
 
+def _detail_worker(link, delay_range=None, rate_limit_semaphore=None):
+    if not link:
+        if delay_range:
+            time.sleep(random.uniform(*delay_range))
+        return {}
+
+    if rate_limit_semaphore is not None:
+        rate_limit_semaphore.acquire()
+    try:
+        details = fetch_detail_attributes(link) or {}
+        if delay_range:
+            time.sleep(random.uniform(*delay_range))
+        return details
+    finally:
+        if rate_limit_semaphore is not None:
+            rate_limit_semaphore.release()
+
+
 def enrich_listings_with_details(
-    listings, enabled, delay_range=None, max_items=None, progress_callback=None
+    listings,
+    enabled,
+    delay_range=None,
+    max_items=None,
+    progress_callback=None,
+    max_workers=3,
+    rate_limit_permits=None,
 ):
     if not enabled or not listings:
         return
 
-    if max_items is not None:
-        total_to_process = min(len(listings), max_items)
-        iterator = islice(listings, total_to_process)
-    else:
-        total_to_process = len(listings)
-        iterator = iter(listings)
+    if not isinstance(listings, list):
+        listings = list(listings)
 
-    for idx, listing in enumerate(iterator, start=1):
-        link = listing.get("link")
-        if link:
-            details = fetch_detail_attributes(link)
-            if details:
-                for key, value in details.items():
-                    if value in (None, ""):
-                        continue
-                    listing[key] = value
-        if progress_callback:
-            progress_callback()
-        if delay_range:
-            wait_time = random.uniform(*delay_range)
-            time.sleep(wait_time)
+    total_available = len(listings)
+    if total_available == 0:
+        return
+
+    if max_items is not None:
+        total_to_process = min(total_available, max_items)
+    else:
+        total_to_process = total_available
+
+    if total_to_process <= 0:
+        return
+
+    iterator = islice(iter(listings), total_to_process)
+    target_listings = list(iterator)
+
+    worker_count = max(1, int(max_workers or 1))
+    rate_limit_semaphore = None
+    if rate_limit_permits is not None:
+        permits = max(1, min(int(rate_limit_permits), worker_count))
+        rate_limit_semaphore = threading.Semaphore(permits)
+
+    futures = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for idx, listing in enumerate(target_listings):
+            link = listing.get("link")
+            future = executor.submit(
+                _detail_worker,
+                link,
+                delay_range=delay_range,
+                rate_limit_semaphore=rate_limit_semaphore,
+            )
+            futures[future] = idx
+
+        results = {}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                results[idx] = future.result() or {}
+            except Exception:
+                results[idx] = {}
+            if progress_callback:
+                progress_callback()
+
+    for idx in range(len(target_listings)):
+        details = results.get(idx)
+        if not details:
+            continue
+        listing = target_listings[idx]
+        for key, value in details.items():
+            if value in (None, ""):
+                continue
+            listing[key] = value
 
 
 def fetch_detail_attributes(url, retries=3, backoff_seconds=2):
@@ -950,9 +1010,24 @@ def run_scraper_flow():
     print()
     enable_detail_capture = detail_input in {"j", "ja", "y", "yes"}
     detail_delay_range = None
+    detail_worker_count = 1
+    detail_rate_limit_permits = None
     if enable_detail_capture:
         print("🔍 Genaue Erfassung aktiv. Jede Anzeige wird einzeln geöffnet.")
         print()
+        worker_input = input(
+            "Wie viele Detailseiten sollen parallel geladen werden? (Enter = 3, min 1, max 5): "
+        ).strip()
+        print()
+        if not worker_input:
+            detail_worker_count = 3
+        else:
+            try:
+                detail_worker_count = int(worker_input)
+            except ValueError:
+                detail_worker_count = 3
+        detail_worker_count = max(1, min(5, detail_worker_count))
+
         random_delay_input = input(
             "Zufällige Pause (ca. 1–2 Sekunden) zwischen Detailseiten einfügen? (Enter = ja, n = feste Pause): "
         ).strip().lower()
@@ -977,6 +1052,20 @@ def run_scraper_flow():
                 except ValueError:
                     detail_delay_range = (1.0, 2.0)
                     print("⚠️  Ungültige Eingabe – verwende zufällige Pause von 1–2 Sekunden.")
+
+        rate_limit_input = input(
+            "Optionale Ratenbegrenzung (max. gleichzeitige Detailabrufe, Enter = aus): "
+        ).strip()
+        print()
+        if rate_limit_input:
+            try:
+                permits = int(rate_limit_input)
+                if permits > 0:
+                    detail_rate_limit_permits = min(permits, detail_worker_count)
+                else:
+                    detail_rate_limit_permits = None
+            except ValueError:
+                detail_rate_limit_permits = None
 
     if os.path.isfile(OUTPUT_CSV):
         os.remove(OUTPUT_CSV)
@@ -1027,6 +1116,8 @@ def run_scraper_flow():
             delay_range=detail_delay_range,
             max_items=remaining_limit if limit is not None else None,
             progress_callback=progress_callback,
+            max_workers=detail_worker_count,
+            rate_limit_permits=detail_rate_limit_permits,
         )
 
         if progress_finalize:
