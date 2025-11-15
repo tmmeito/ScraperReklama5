@@ -148,7 +148,7 @@ class UserSettings:
     detail_worker_count: int = 3
     detail_rate_limit_permits: Optional[int] = None
     csv_filename: str = OUTPUT_CSV
-    db_path: Optional[str] = None
+    use_sqlite: bool = False
     skip_unchanged: bool = False
     developer_logging: bool = False
 
@@ -214,7 +214,13 @@ def load_user_settings():
         rate_limit = None
     if rate_limit is not None and rate_limit <= 0:
         rate_limit = None
-    db_enabled = bool(raw.get("db_path"))
+    use_sqlite_raw = raw.get("use_sqlite")
+    if isinstance(use_sqlite_raw, str):
+        use_sqlite = use_sqlite_raw.strip().lower() in {"1", "true", "t", "yes", "y", "j", "ja"}
+    else:
+        use_sqlite = bool(use_sqlite_raw)
+    if not use_sqlite and raw.get("db_path"):
+        use_sqlite = True
     settings = UserSettings(
         base_url_template=base_url,
         search_term=raw.get("search_term", ""),
@@ -225,7 +231,7 @@ def load_user_settings():
         detail_worker_count=worker_count,
         detail_rate_limit_permits=rate_limit,
         csv_filename=raw.get("csv_filename", OUTPUT_CSV),
-        db_path=sqlite_store.DEFAULT_DB_PATH if db_enabled else None,
+        use_sqlite=use_sqlite,
         skip_unchanged=bool(raw.get("skip_unchanged", False)),
         developer_logging=bool(raw.get("developer_logging", False)),
     )
@@ -330,8 +336,8 @@ def settings_menu():
         limit_label = settings.limit if settings.limit is not None else "alle"
         delay_label = _format_delay_label(settings.detail_delay_range)
         storage_label = (
-            f"SQLite → {settings.db_path}"
-            if settings.db_path
+            f"SQLite → {sqlite_store.DEFAULT_DB_PATH}"
+            if settings.use_sqlite
             else f"CSV → {settings.csv_filename}"
         )
         detail_label = "aktiv" if settings.enable_detail_capture else "aus"
@@ -494,14 +500,14 @@ def settings_menu():
             if new_csv:
                 _update_settings(csv_filename=new_csv)
         elif choice == "10":
-            current_label = "aktiv" if settings.db_path else "aus"
+            current_label = "aktiv" if settings.use_sqlite else "aus"
             toggle = input(
                 f"SQLite-Speicherung aktivieren? (Enter = {current_label}, j/n): "
             ).strip().lower()
             if toggle in {"j", "ja", "y", "yes", "1"}:
-                _update_settings(db_path=sqlite_store.DEFAULT_DB_PATH)
+                _update_settings(use_sqlite=True)
             elif toggle in {"n", "nein", "0"}:
-                _update_settings(db_path=None)
+                _update_settings(use_sqlite=False)
         elif choice == "11":
             current_mode = "überspringen" if settings.skip_unchanged else "markieren"
             prompt = (
@@ -1596,7 +1602,7 @@ def run_scraper_flow_from_config(config, *, interactive=True):
     if config.base_url_template:
         BASE_URL_TEMPLATE = config.base_url_template
 
-    db_enabled = bool((config.db_path or "").strip())
+    db_enabled = bool(config.db_path)
     db_path = sqlite_store.DEFAULT_DB_PATH if db_enabled else None
     db_connection = None
     csv_filename = None
@@ -1982,8 +1988,8 @@ def _format_settings_summary(settings):
     limit_label = settings.limit if settings.limit is not None else "alle"
     delay_label = _format_delay_label(settings.detail_delay_range)
     storage_label = (
-        f"SQLite → {settings.db_path}"
-        if settings.db_path
+        f"SQLite → {sqlite_store.DEFAULT_DB_PATH}"
+        if settings.use_sqlite
         else f"CSV → {settings.csv_filename}"
     )
     detail_label = "aktiv" if settings.enable_detail_capture else "aus"
@@ -2014,7 +2020,9 @@ def _build_config_from_settings(settings):
     detail_rate_limit_permits = (
         settings.detail_rate_limit_permits if enable_detail else None
     )
-    csv_filename = None if settings.db_path else (settings.csv_filename or OUTPUT_CSV)
+    use_sqlite = bool(settings.use_sqlite)
+    csv_filename = None if use_sqlite else (settings.csv_filename or OUTPUT_CSV)
+    db_path = sqlite_store.DEFAULT_DB_PATH if use_sqlite else None
     return ScraperConfig(
         search_term=settings.search_term or "",
         days=settings.days or 1,
@@ -2025,7 +2033,7 @@ def _build_config_from_settings(settings):
         detail_rate_limit_permits=detail_rate_limit_permits,
         csv_filename=csv_filename,
         base_url_template=base_url,
-        db_path=settings.db_path,
+        db_path=db_path,
         skip_unchanged=settings.skip_unchanged,
         developer_logging=settings.developer_logging,
     )
@@ -2158,9 +2166,9 @@ def _prompt_temporary_overrides(settings):
                 "SQLite-Speicherung aktivieren? (j/n, Enter = unverändert): "
             ).strip().lower()
             if toggle in {"j", "ja", "y", "yes", "1"}:
-                overrides["db_path"] = sqlite_store.DEFAULT_DB_PATH
+                overrides["use_sqlite"] = True
             elif toggle in {"n", "nein", "0"}:
-                overrides["db_path"] = None
+                overrides["use_sqlite"] = False
         elif choice == "u":
             current_label = "überspringen" if working_settings.skip_unchanged else "markieren"
             new_mode = input(
