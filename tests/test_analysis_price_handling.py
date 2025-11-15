@@ -72,7 +72,36 @@ def test_display_summary_counts_empty_price_as_low_price(capfd):
         },
     ]
 
-    scraper.display_make_model_summary(rows, min_price_for_avg=500, top_n=1)
+    analysis = scraper.AnalysisData(rows)
+    scraper.display_make_model_summary(analysis, min_price_for_avg=500, top_n=1)
 
     captured = capfd.readouterr().out
     assert "2 (1)" in captured
+
+
+def test_analysis_data_avoids_multiple_scans_for_repeated_calls(capfd):
+    class CountingList(list):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    rows = CountingList(
+        [
+            {"make": "Test", "model": "Car", "fuel": "Diesel", "price": 1000, "year": 2020},
+            {"make": "Test", "model": "Car", "fuel": "Diesel", "price": 1500, "year": 2021},
+            {"make": "Test", "model": "Car", "fuel": "Diesel", "price": 300, "year": 2020},
+        ]
+    )
+
+    analysis = scraper.AnalysisData(rows)
+    assert rows.iterations == 1
+
+    scraper.display_make_model_summary(analysis, min_price_for_avg=0, top_n=1)
+    scraper.display_avg_price_by_model_year(analysis, min_listings=1, min_price_for_avg=0)
+    scraper.display_make_model_summary(analysis, min_price_for_avg=1000, top_n=1)
+
+    assert rows.iterations == 1
