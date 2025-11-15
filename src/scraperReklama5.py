@@ -1065,8 +1065,13 @@ def save_raw_filtered(
     if not saved_rows:
         return 0
 
+    sanitized_rows = [
+        {name: row.get(name) for name in CSV_FIELDNAMES}
+        for row in saved_rows
+    ]
+
     if db_connection is not None:
-        sqlite_store.upsert_many(db_connection, saved_rows, CSV_FIELDNAMES)
+        sqlite_store.upsert_many(db_connection, sanitized_rows, CSV_FIELDNAMES)
         return len(saved_rows)
 
     target_csv = csv_filename or OUTPUT_CSV
@@ -1075,7 +1080,7 @@ def save_raw_filtered(
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
         if not file_exists:
             writer.writeheader()
-        writer.writerows(saved_rows)
+        writer.writerows(sanitized_rows)
     return len(saved_rows)
 
 def aggregate_data(
