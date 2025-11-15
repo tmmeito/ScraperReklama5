@@ -996,6 +996,7 @@ def analysis_menu(*, db_path):
             print()
             choice = input("Deine Auswahl: ").strip()
             if choice == "1":
+                clear_screen()
                 stats = sqlite_store.fetch_make_model_stats(
                     conn,
                     min_price=min_price_for_avg,
@@ -1007,6 +1008,7 @@ def analysis_menu(*, db_path):
                 )
                 display_recent_price_changes(conn)
             elif choice == "2":
+                clear_screen()
                 stats = sqlite_store.fetch_model_year_stats(
                     conn,
                     min_price=min_price_for_avg,
@@ -1020,6 +1022,7 @@ def analysis_menu(*, db_path):
                 )
                 display_recent_price_changes(conn)
             elif choice == "3":
+                clear_screen()
                 (
                     min_price_for_avg,
                     db_days_filter,
@@ -1538,6 +1541,7 @@ def main(argv=None):
             print("👋 Bis zum nächsten Mal!")
             break
         if start_choice == "2":
+            clear_screen()
             db_path = sqlite_store.DEFAULT_DB_PATH
             if not os.path.isfile(db_path):
                 print(
@@ -1551,6 +1555,7 @@ def main(argv=None):
             print("👋 Bis zum nächsten Mal!")
             break
         elif start_choice == "1":
+            clear_screen()
             outcome = run_scraper_flow()
             if outcome == "main":
                 continue
