@@ -13,7 +13,7 @@ from storage import sqlite_store
 def make_connection():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, scraper.CSV_FIELDNAMES)
+    sqlite_store.init_schema(conn, scraper.DB_FIELDNAMES)
     return conn
 
 
@@ -52,7 +52,7 @@ def test_upsert_many_inserts_listing_and_hash():
     conn = make_connection()
     ts = datetime(2024, 1, 5, 13, 0, 0)
 
-    sqlite_store.upsert_many(conn, [base_listing()], scraper.CSV_FIELDNAMES, timestamp=ts)
+    sqlite_store.upsert_many(conn, [base_listing()], scraper.DB_FIELDNAMES, timestamp=ts)
 
     rows = conn.execute("SELECT * FROM listings").fetchall()
     assert len(rows) == 1
@@ -70,11 +70,11 @@ def test_upsert_many_tracks_changes_and_updates_last_seen():
     ts1 = datetime(2024, 1, 5, 13, 0, 0)
     ts2 = datetime(2024, 1, 7, 14, 30, 0)
 
-    sqlite_store.upsert_many(conn, [base_listing()], scraper.CSV_FIELDNAMES, timestamp=ts1)
+    sqlite_store.upsert_many(conn, [base_listing()], scraper.DB_FIELDNAMES, timestamp=ts1)
     sqlite_store.upsert_many(
         conn,
         [base_listing({"price": 15500, "km": 125000})],
-        scraper.CSV_FIELDNAMES,
+        scraper.DB_FIELDNAMES,
         timestamp=ts2,
     )
 
@@ -102,11 +102,11 @@ def test_upsert_many_skips_null_overwrites_and_keeps_updated_at():
     ts1 = datetime(2024, 1, 5, 13, 0, 0)
     ts2 = datetime(2024, 1, 6, 15, 0, 0)
 
-    sqlite_store.upsert_many(conn, [base_listing()], scraper.CSV_FIELDNAMES, timestamp=ts1)
+    sqlite_store.upsert_many(conn, [base_listing()], scraper.DB_FIELDNAMES, timestamp=ts1)
     sqlite_store.upsert_many(
         conn,
         [base_listing({"km": None, "price": 15000})],
-        scraper.CSV_FIELDNAMES,
+        scraper.DB_FIELDNAMES,
         timestamp=ts2,
     )
 
@@ -141,13 +141,13 @@ def test_fetch_make_model_stats_respects_filters(monkeypatch):
             base_listing({"id": "b", "make": "VW", "model": "Golf", "price": 800}),
             base_listing({"id": "c", "make": "Toyota", "model": "Aygo", "price": 6500}),
         ],
-        scraper.CSV_FIELDNAMES,
+        scraper.DB_FIELDNAMES,
         timestamp=recent,
     )
     sqlite_store.upsert_many(
         conn,
         [base_listing({"id": "d", "make": "VW", "model": "Polo", "price": 4000})],
-        scraper.CSV_FIELDNAMES,
+        scraper.DB_FIELDNAMES,
         timestamp=older,
     )
 
@@ -184,7 +184,7 @@ def test_fetch_model_year_stats_ignores_missing_years(monkeypatch):
             base_listing({"id": "b", "year": None, "price": 9500}),
             base_listing({"id": "c", "year": 2020, "price": 500}),
         ],
-        scraper.CSV_FIELDNAMES,
+        scraper.DB_FIELDNAMES,
         timestamp=now,
     )
 
@@ -201,11 +201,11 @@ def test_fetch_recent_price_changes_returns_deserialized_values():
     conn = make_connection()
     ts1 = datetime(2024, 1, 5, 13, 0, 0)
     ts2 = datetime(2024, 1, 6, 13, 0, 0)
-    sqlite_store.upsert_many(conn, [base_listing()], scraper.CSV_FIELDNAMES, timestamp=ts1)
+    sqlite_store.upsert_many(conn, [base_listing()], scraper.DB_FIELDNAMES, timestamp=ts1)
     sqlite_store.upsert_many(
         conn,
         [base_listing({"price": 14900})],
-        scraper.CSV_FIELDNAMES,
+        scraper.DB_FIELDNAMES,
         timestamp=ts2,
     )
 
