@@ -645,14 +645,13 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
         }
     )
 
-    for row in rows:
-        make = row.get("make") or "Unbekannt"
-        model = row.get("model") or "Unbekannt"
-        fuel = row.get("fuel") or "Unbekannt"
-        price = row.get("price")
+    @staticmethod
+    def _bucket_factory():
+        return {"count": 0, "sum": 0}
 
-        key = (make, model, fuel)
-        grouped[key]["count_total"] += 1
+    @staticmethod
+    def _normalize_field(value, fallback="Unbekannt"):
+        return value if (value is not None and value != "") else fallback
 
         if price is None:
             grouped[key]["missing_price_count"] += 1
@@ -662,6 +661,12 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
             grouped[key]["count_for_avg"] += 1
             grouped[key]["sum"] += price
 
+def display_make_model_summary(analysis_data, min_price_for_avg=500, top_n=15):
+    if not analysis_data or not analysis_data.make_model_groups:
+        print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
+        return
+
+    grouped = analysis_data.make_model_stats(min_price_for_avg)
     if not grouped:
         print("Keine Daten für die Auswertung verfügbar.")
         return
@@ -699,8 +704,10 @@ def display_make_model_summary(rows, min_price_for_avg=500, top_n=15):
         )
 
 
-def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500):
-    if not rows:
+def display_avg_price_by_model_year(
+    analysis_data, min_listings=1, min_price_for_avg=500
+):
+    if not analysis_data or not analysis_data.model_year_groups:
         print("Keine CSV-Daten vorhanden. Bitte zuerst Daten sammeln.")
         return
     groups = defaultdict(
@@ -750,7 +757,7 @@ def display_avg_price_by_model_year(rows, min_listings=1, min_price_for_avg=500)
 
     sorted_groups = sorted(groups.items(), key=_sort_group)
     for (make, model, fuel, year), stats in sorted_groups:
-        if stats["count"] < min_listings:
+        if stats["count_for_avg"] < min_listings:
             continue
         if stats["count"]:
             avg_price = stats["sum"] / stats["count"]
@@ -793,7 +800,7 @@ def analysis_menu(csv_filename=OUTPUT_CSV):
     if not os.path.isfile(csv_filename):
         print(f"\n⚠️  Keine Daten für Analysen vorhanden (Datei: {csv_filename}).")
         return "exit"
-    csv_rows = None
+    analysis_data = None
     min_price_for_avg = prompt_min_price(500)
     while True:
         print_section("📊 Analyse-Center")
@@ -808,14 +815,18 @@ def analysis_menu(csv_filename=OUTPUT_CSV):
         print()
         choice = input("Deine Auswahl: ").strip()
         if choice == "1":
-            if csv_rows is None:
-                csv_rows = load_rows_from_csv(csv_filename)
-            display_make_model_summary(csv_rows, min_price_for_avg=min_price_for_avg)
+            if analysis_data is None:
+                rows = load_rows_from_csv(csv_filename)
+                analysis_data = AnalysisData(rows)
+            display_make_model_summary(
+                analysis_data, min_price_for_avg=min_price_for_avg
+            )
         elif choice == "2":
-            if csv_rows is None:
-                csv_rows = load_rows_from_csv(csv_filename)
+            if analysis_data is None:
+                rows = load_rows_from_csv(csv_filename)
+                analysis_data = AnalysisData(rows)
             display_avg_price_by_model_year(
-                csv_rows,
+                analysis_data,
                 min_listings=1,
                 min_price_for_avg=min_price_for_avg,
             )
