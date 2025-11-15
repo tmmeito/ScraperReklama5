@@ -136,6 +136,7 @@ class ScraperConfig:
     base_url_template: Optional[str] = None
     db_path: Optional[str] = None
     skip_unchanged: bool = False
+    developer_logging: bool = False
 
 
 @dataclass
@@ -151,6 +152,7 @@ class UserSettings:
     csv_filename: str = OUTPUT_CSV
     db_path: Optional[str] = None
     skip_unchanged: bool = False
+    developer_logging: bool = False
 
 
 def _serialize_user_settings(settings: UserSettings):
@@ -227,6 +229,7 @@ def load_user_settings():
         csv_filename=raw.get("csv_filename", OUTPUT_CSV),
         db_path=sqlite_store.DEFAULT_DB_PATH if db_enabled else None,
         skip_unchanged=bool(raw.get("skip_unchanged", False)),
+        developer_logging=bool(raw.get("developer_logging", False)),
     )
     return settings
 
@@ -257,6 +260,16 @@ _apply_settings_to_globals()
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def _build_developer_logger(enabled):
+    if not enabled:
+        return None
+
+    def _logger(message):
+        print(f"🛠️  DEV: {message}")
+
+    return _logger
 
 
 def print_banner(title):
@@ -325,6 +338,7 @@ def settings_menu():
         )
         detail_label = "aktiv" if settings.enable_detail_capture else "aus"
         unchanged_label = "überspringen" if settings.skip_unchanged else "markieren"
+        developer_label = "aktiv" if settings.developer_logging else "aus"
         print_section("⚙️  Standard-Einstellungen")
         print(f"   • Basis-URL.........: {shorten_url(settings.base_url_template)}")
         print(f"   • Suchbegriff.......: {settings.search_term or 'alle'}")
@@ -337,6 +351,7 @@ def settings_menu():
         print(f"   • Detail-Rate-Limit.: {rate_label}")
         print(f"   • Speicherung.......: {storage_label}")
         print(f"   • Unveränderte......: {unchanged_label}")
+        print(f"   • Entwickler-Log....: {developer_label}")
         print()
         print("  [1] 🔗 Basis-URL anpassen")
         print("  [2] 🔎 Suchbegriff festlegen")
@@ -349,6 +364,7 @@ def settings_menu():
         print("  [9] 💾 CSV-Datei ändern")
         print("  [10] 🗄️  SQLite-Speicherung an/aus")
         print("  [11] ♻️  Umgang mit unveränderten Einträgen")
+        print("  [12] 🧑‍💻 Entwickler-Einstellungen")
         print()
         print("  [0] ↩️  Zurück zum Hauptmenü")
         print()
@@ -499,6 +515,40 @@ def settings_menu():
                 _update_settings(skip_unchanged=True)
             elif new_mode in {"mark", "m", "anzeigen"}:
                 _update_settings(skip_unchanged=False)
+        elif choice == "12":
+            developer_settings_menu()
+        elif choice == "0":
+            return
+        else:
+            print("⚠️  Ungültige Auswahl. Bitte erneut versuchen.")
+            time.sleep(1.2)
+
+
+def developer_settings_menu():
+    while True:
+        clear_screen()
+        settings = current_settings
+        log_label = "aktiv" if settings.developer_logging else "aus"
+        print_section("🧑‍💻 Entwickler-Einstellungen")
+        print(f"   • Detaillierte Protokollierung: {log_label}")
+        print()
+        print("  [1] Protokollierung umschalten")
+        print()
+        print("  [0] ↩️  Zurück")
+        print()
+        choice = input("Deine Auswahl: ").strip()
+        if choice == "1":
+            prompt = f"Ausführliche Protokollierung aktivieren? (Enter = {log_label}, j/n): "
+            toggle = input(prompt).strip().lower()
+            if not toggle:
+                continue
+            if toggle in {"j", "ja", "y", "yes", "1"}:
+                _update_settings(developer_logging=True)
+            elif toggle in {"n", "nein", "0"}:
+                _update_settings(developer_logging=False)
+            else:
+                print("⚠️  Ungültige Auswahl.")
+                time.sleep(1.2)
         elif choice == "0":
             return
         else:
@@ -840,7 +890,7 @@ def _dates_equivalent(old_value, new_value):
     return old_value == new_value
 
 
-def classify_listing_status(listings, db_connection):
+def classify_listing_status(listings, db_connection, developer_logger=None):
     """Annotate ``listings`` with a status compared to the SQLite store."""
 
     status_map: Dict[str, Dict[str, object]] = {}
@@ -848,6 +898,7 @@ def classify_listing_status(listings, db_connection):
         return status_map
 
     fallback_counter = 0
+    total_items = len(listings)
     for listing in listings:
         fallback_counter += 1
         raw_id = listing.get("id")
@@ -855,8 +906,25 @@ def classify_listing_status(listings, db_connection):
         cache_key = normalized_id or f"tmp-{fallback_counter}"
         listing_status = STATUS_NEW
         changes: Dict[str, Dict[str, object]] = {}
+        use_database = db_connection is not None and normalized_id
+        display_id = normalized_id or f"tmp-{fallback_counter}"
 
-        if db_connection is not None and normalized_id:
+        if developer_logger:
+            if not normalized_id:
+                developer_logger(
+                    f"[DB] ({fallback_counter}/{total_items}) Anzeige ohne ID – Status {STATUS_LABELS[STATUS_NEW]}"
+                )
+            elif db_connection is None:
+                developer_logger(
+                    f"[DB] ({fallback_counter}/{total_items}) ID {display_id}: keine Datenbank – Status {STATUS_LABELS[STATUS_NEW]}"
+                )
+            else:
+                developer_logger(
+                    f"[DB] ({fallback_counter}/{total_items}) Suche ID {display_id} in der Datenbank"
+                )
+
+        existing = None
+        if use_database:
             normalized_payload = _normalize_listing_payload_for_hash(listing)
             existing = sqlite_store.fetch_listing_by_id(db_connection, normalized_id)
             if existing is None:
@@ -898,6 +966,25 @@ def classify_listing_status(listings, db_connection):
                     changes["hash"] = {"old": existing_hash, "new": listing_hash}
 
                 listing_status = STATUS_CHANGED if changes else STATUS_UNCHANGED
+
+            if developer_logger:
+                if existing is None:
+                    developer_logger(
+                        f"[DB] ({fallback_counter}/{total_items}) ID {display_id} nicht gefunden – Status {STATUS_LABELS[listing_status]}"
+                    )
+                elif listing_status == STATUS_CHANGED:
+                    changed_fields = [field for field in changes.keys() if field != "hash"]
+                    if "hash" in changes and not changed_fields:
+                        changed_fields.append("Hash")
+                    field_list = ", ".join(changed_fields) if changed_fields else "-"
+                    developer_logger(
+                        f"[DB] ({fallback_counter}/{total_items}) ID {display_id} geändert – Felder: {field_list}"
+                    )
+                else:
+                    developer_logger(
+                        f"[DB] ({fallback_counter}/{total_items}) ID {display_id} unverändert"
+                    )
+
         listing["_status"] = listing_status
         listing["_status_changes"] = changes
         status_map[cache_key] = {"status": listing_status, "changes": changes}
@@ -1555,9 +1642,19 @@ def run_scraper_flow_from_config(config, *, interactive=True):
         detail_rate_limit_permits = None
 
     skip_unchanged = bool(getattr(config, "skip_unchanged", False))
+    developer_logging_enabled = bool(getattr(config, "developer_logging", False))
+    developer_logger = _build_developer_logger(developer_logging_enabled)
 
     if csv_filename and os.path.isfile(csv_filename):
         os.remove(csv_filename)
+
+    if developer_logger:
+        if db_connection is not None:
+            developer_logger(f"Starte Lauf mit SQLite-Ziel {db_path}")
+        else:
+            developer_logger(
+                f"Starte Lauf mit CSV-Ziel {csv_filename or OUTPUT_CSV}"
+            )
 
     total_found = 0
     total_saved = 0
@@ -1575,36 +1672,81 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
     try:
         for page in range(1, 200):
+            if developer_logger:
+                developer_logger(f"Lade Seite {page:02d} für Suche '{search_term or 'alle'}'")
             html = fetch_listing_page(search_term, page)
             if not html:
                 print()
                 print(f"⚠️  Seite {page} konnte nicht geladen werden. Stop.")
+                if developer_logger:
+                    developer_logger(f"Abbruch: Seite {page:02d} lieferte keinen Inhalt")
                 break
             listings = parse_listing(html)
+            if developer_logger:
+                developer_logger(
+                    f"Seite {page:02d}: {len(listings)} Inserate in der Übersicht gefunden"
+                )
 
             if not listings:
                 print()
                 print(f"ℹ️  Keine Listings auf Seite {page} → Stop.")
+                if developer_logger:
+                    developer_logger(f"Abbruch: Seite {page:02d} enthielt keine Anzeigen")
                 break
 
-            eligible_listings = [
-                item for item in listings
-                if item["date"] and is_within_days(item["date"], days, item["promoted"])
-            ]
+            eligible_listings = []
+            skipped_promoted = 0
+            skipped_missing_date = 0
+            skipped_old = 0
+            for item in listings:
+                promoted = bool(item.get("promoted"))
+                date_value = item.get("date")
+                if promoted:
+                    skipped_promoted += 1
+                    continue
+                if not date_value:
+                    skipped_missing_date += 1
+                    continue
+                if not is_within_days(date_value, days, promoted):
+                    skipped_old += 1
+                    continue
+                eligible_listings.append(item)
+            if developer_logger:
+                developer_logger(
+                    "Filter: {eligible} übrig ({promo} promoviert ignoriert, "
+                    "{old} zu alt, {missing} ohne Datum)".format(
+                        eligible=len(eligible_listings),
+                        promo=skipped_promoted,
+                        old=skipped_old,
+                        missing=skipped_missing_date,
+                    )
+                )
             pages_viewed += 1
 
             duplicates_skipped_page = 0
             deduplicated = []
+            if developer_logger and eligible_listings:
+                developer_logger(
+                    f"Seite {page:02d}: überprüfe {len(eligible_listings)} Anzeigen auf Duplikate"
+                )
             for item in eligible_listings:
                 item_id = item.get("id")
                 if item_id and item_id in seen_ids:
                     duplicates_skipped_page += 1
+                    if developer_logger:
+                        developer_logger(
+                            f"Seite {page:02d}: Anzeige {item_id} bereits verarbeitet – überspringe"
+                        )
                     continue
                 if item_id:
                     seen_ids.add(item_id)
                 deduplicated.append(item)
             eligible_listings = deduplicated
             duplicates_skipped_total += duplicates_skipped_page
+            if developer_logger:
+                developer_logger(
+                    f"Seite {page:02d}: {len(eligible_listings)} eindeutige Anzeigen nach Duplikatprüfung"
+                )
 
             remaining_limit = None
             if limit is not None:
@@ -1613,8 +1755,16 @@ def run_scraper_flow_from_config(config, *, interactive=True):
                     print(
                         f"ℹ️  Maximalanzahl von {limit} Einträgen bereits erreicht. Stop."
                     )
+                    if developer_logger:
+                        developer_logger(
+                            f"Limit {limit} erreicht – beende nach Seite {page:02d}"
+                        )
                     break
                 eligible_listings = eligible_listings[:remaining_limit]
+                if developer_logger:
+                    developer_logger(
+                        f"Limit aktiv: prüfe nur noch {len(eligible_listings)} Einträge auf Seite {page:02d}"
+                    )
 
             found_on_page = len(eligible_listings)
             total_found += found_on_page
@@ -1624,15 +1774,32 @@ def run_scraper_flow_from_config(config, *, interactive=True):
                 print(f"↺ {duplicates_skipped_page} Duplikate übersprungen")
             print(INLINE_PROGRESS_SYMBOL * found_on_page)
 
-            classify_listing_status(eligible_listings, db_connection)
+            classify_listing_status(
+                eligible_listings,
+                db_connection,
+                developer_logger=developer_logger,
+            )
             page_status_counts = {
                 STATUS_NEW: 0,
                 STATUS_CHANGED: 0,
                 STATUS_UNCHANGED: 0,
             }
-            for listing in eligible_listings:
+            for idx, listing in enumerate(eligible_listings, 1):
                 status_value = listing.get("_status") or STATUS_NEW
                 page_status_counts[status_value] = page_status_counts.get(status_value, 0) + 1
+                if developer_logger:
+                    listing_id = listing.get("id") or f"ohne-ID#{idx}"
+                    if status_value == STATUS_UNCHANGED:
+                        decision = "Detailabruf entfällt"
+                        if skip_unchanged:
+                            decision += ", wird übersprungen"
+                    elif not enable_detail_capture:
+                        decision = "Detail-Erfassung deaktiviert"
+                    else:
+                        decision = "Detailabruf geplant"
+                    developer_logger(
+                        f"[Status] ({idx}/{len(eligible_listings)}) ID {listing_id}: {STATUS_LABELS.get(status_value, status_value)} – {decision}"
+                    )
             for key, value in page_status_counts.items():
                 status_totals[key] = status_totals.get(key, 0) + value
             if skip_unchanged:
@@ -1656,6 +1823,15 @@ def run_scraper_flow_from_config(config, *, interactive=True):
                 for item in eligible_listings
                 if (item.get("_status") or STATUS_NEW) != STATUS_UNCHANGED
             ]
+            if developer_logger:
+                if not enable_detail_capture:
+                    developer_logger("Detail-Erfassung deaktiviert – überspringe Detailaufrufe")
+                elif detail_candidates:
+                    developer_logger(
+                        f"Detailabrufe geplant für {len(detail_candidates)} von {len(eligible_listings)} Anzeigen"
+                    )
+                else:
+                    developer_logger("Keine Detailabrufe nötig – alle Anzeigen unverändert")
 
             progress_callback = None
             progress_finalize = None
@@ -1678,6 +1854,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
             if progress_finalize:
                 progress_finalize()
+            if developer_logger and enable_detail_capture and detail_candidates:
+                developer_logger("Detailabrufe abgeschlossen")
 
             listings_to_persist = (
                 detail_candidates if skip_unchanged else eligible_listings
@@ -1690,6 +1868,13 @@ def run_scraper_flow_from_config(config, *, interactive=True):
             save_kwargs["pre_filtered"] = True
             if db_connection is not None:
                 save_kwargs["db_connection"] = db_connection
+            if developer_logger:
+                target_label = (
+                    f"SQLite ({db_path})" if db_connection is not None else f"CSV ({csv_filename})"
+                )
+                developer_logger(
+                    f"Speichere {len(listings_to_persist)} Anzeigen → {target_label}"
+                )
             saved_in_page = save_raw_filtered(
                 listings_to_persist,
                 days,
@@ -1697,6 +1882,10 @@ def run_scraper_flow_from_config(config, *, interactive=True):
             )
             total_saved += saved_in_page
             print(f"{saved_in_page:02d} von {found_on_page:02d} gespeichert")
+            if developer_logger:
+                developer_logger(
+                    f"Speicherung abgeschlossen – {saved_in_page} Einträge übernommen"
+                )
             print()
 
             if limit is not None and total_saved >= limit:
@@ -1713,6 +1902,10 @@ def run_scraper_flow_from_config(config, *, interactive=True):
                         f"ℹ️  Anzeige älter als {days} Tage gefunden "
                         f"(ID {item['id']}) auf Seite {page}. Stop."
                     )
+                    if developer_logger:
+                        developer_logger(
+                            f"Abbruchkriterium erreicht: Anzeige {item.get('id')} ist älter als {days} Tage"
+                        )
                     stop = True
                     break
             if stop:
@@ -1720,11 +1913,17 @@ def run_scraper_flow_from_config(config, *, interactive=True):
 
             sleep_time = random.uniform(2, 4)
             time.sleep(sleep_time)
+            if developer_logger:
+                developer_logger(f"Warte {sleep_time:.2f}s vor nächster Seite")
     finally:
         if db_connection is not None:
             db_connection.close()
 
     total_duration = max(0.0, time.time() - start_time)
+    if developer_logger:
+        developer_logger(
+            f"Zusammenfassung: {total_found} gefunden, {total_saved} gespeichert, Dauer {total_duration:.2f}s"
+        )
 
     print_section("📦 Zusammenfassung")
     print(
@@ -1778,6 +1977,7 @@ def _format_settings_summary(settings):
     detail_label = "aktiv" if settings.enable_detail_capture else "aus"
     rate_label = settings.detail_rate_limit_permits or "aus"
     unchanged_label = "überspringen" if settings.skip_unchanged else "markieren"
+    developer_label = "aktiv" if settings.developer_logging else "aus"
     lines = [
         f"   • Basis-URL.........: {shorten_url(settings.base_url_template)}",
         f"   • Suchbegriff.......: {settings.search_term or 'alle'}",
@@ -1789,6 +1989,7 @@ def _format_settings_summary(settings):
         f"   • Detail-Rate-Limit.: {rate_label}",
         f"   • Speicherung.......: {storage_label}",
         f"   • Unveränderte......: {unchanged_label}",
+        f"   • Entwickler-Log....: {developer_label}",
     ]
     return "\n".join(lines)
 
@@ -1814,6 +2015,7 @@ def _build_config_from_settings(settings):
         base_url_template=base_url,
         db_path=settings.db_path,
         skip_unchanged=settings.skip_unchanged,
+        developer_logging=settings.developer_logging,
     )
 
 
@@ -1864,6 +2066,7 @@ def _prompt_temporary_overrides(settings):
         print("  [c] 💾 CSV-Datei")
         print("  [x] 🗄️  SQLite-Speicherung")
         print("  [u] ♻️  Umgang mit unveränderten Einträgen")
+        print("  [v] 🧑‍💻 Entwickler-Log")
         print()
         choice = input("Feld wählen ([Enter] fertig, q = Abbrechen): ").strip().lower()
         if not choice:
@@ -1955,6 +2158,14 @@ def _prompt_temporary_overrides(settings):
                 overrides["skip_unchanged"] = True
             elif new_mode in {"mark", "m", "anzeigen"}:
                 overrides["skip_unchanged"] = False
+        elif choice == "v":
+            toggle = input(
+                "Ausführliche Protokollierung aktivieren? (j/N): "
+            ).strip().lower()
+            if toggle in {"j", "ja", "y", "yes", "1"}:
+                overrides["developer_logging"] = True
+            elif toggle in {"n", "nein", "0"}:
+                overrides["developer_logging"] = False
         else:
             print("⚠️  Unbekannte Auswahl.")
             time.sleep(1)
@@ -2078,6 +2289,11 @@ def build_cli_parser():
         action="store_true",
         help="Unveränderte Einträge nicht erneut speichern",
     )
+    parser.add_argument(
+        "--developer-log",
+        action="store_true",
+        help="Ausführliche Entwickler-Protokolle für jeden Schritt ausgeben",
+    )
     return parser
 
 
@@ -2122,6 +2338,7 @@ def run_cli_from_args(args):
         base_url_template=base_url_template,
         db_path=db_path,
         skip_unchanged=bool(args.skip_unchanged),
+        developer_logging=bool(args.developer_log),
     )
     result = run_scraper_flow_from_config(config, interactive=False)
     print_section("✅ Automatischer Lauf abgeschlossen")
