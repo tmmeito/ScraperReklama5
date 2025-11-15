@@ -104,34 +104,6 @@ def test_display_summary_counts_missing_price_entries(capfd):
     scraper.display_make_model_summary(rows, min_price_for_avg=500, top_n=1)
 
     captured = capfd.readouterr().out
-    assert "2 (1 / -)" in captured
-
-
-def test_display_summary_counts_missing_price_entries(capfd):
-    rows = [
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "price": None,
-        },
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "price": None,
-        },
-        {
-            "make": "Test",
-            "model": "Car",
-            "fuel": "Diesel",
-            "price": 1500,
-        },
-    ]
-
-    scraper.display_make_model_summary(rows, min_price_for_avg=500, top_n=1)
-
-    captured = capfd.readouterr().out
     assert "3 (- / 2)" in captured
 
 
