@@ -8,7 +8,6 @@ if str(SRC_DIR) not in sys.path:
 
 from scraperReklama5 import (
     CSV_FIELDNAMES,
-    DB_FIELDNAMES,
     DETAIL_ONLY_FIELDS,
     STATUS_UNCHANGED,
     classify_listing_status,
@@ -41,7 +40,7 @@ def build_listing(**overrides):
 def test_classify_listing_status_ignores_detail_only_fields():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, DB_FIELDNAMES)
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
 
     stored_listing = build_listing(
         fuel="Diesel",
@@ -52,7 +51,7 @@ def test_classify_listing_status_ignores_detail_only_fields():
         reg_until="2025-01",
         emission_class="Euro 6",
     )
-    sqlite_store.upsert_many(conn, [stored_listing], DB_FIELDNAMES)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
 
     followup_listing = build_listing()
     for field in DETAIL_ONLY_FIELDS:
@@ -68,10 +67,10 @@ def test_classify_listing_status_ignores_detail_only_fields():
 def test_classify_listing_status_keeps_numeric_details_when_missing_in_overview():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, DB_FIELDNAMES)
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
 
     stored_listing = build_listing(km=120_000, kw=85, ps=115)
-    sqlite_store.upsert_many(conn, [stored_listing], DB_FIELDNAMES)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
 
     followup_listing = build_listing(km=None, kw=None, ps=None)
 
@@ -84,10 +83,10 @@ def test_classify_listing_status_keeps_numeric_details_when_missing_in_overview(
 def test_classify_listing_status_detects_real_numeric_changes():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, DB_FIELDNAMES)
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
 
     stored_listing = build_listing(km=120_000, kw=85, ps=115)
-    sqlite_store.upsert_many(conn, [stored_listing], DB_FIELDNAMES)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
 
     followup_listing = build_listing(km=121_000)
 
@@ -103,10 +102,10 @@ def test_classify_listing_status_detects_real_numeric_changes():
 def test_classify_listing_status_ignores_minor_date_drift():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, DB_FIELDNAMES)
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
 
     stored_listing = build_listing(date="2024-05-01 12:00")
-    sqlite_store.upsert_many(conn, [stored_listing], DB_FIELDNAMES)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
 
     followup_listing = build_listing(date="2024-05-01 12:30")
 
@@ -119,10 +118,10 @@ def test_classify_listing_status_ignores_minor_date_drift():
 def test_classify_listing_status_flags_large_date_changes():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, DB_FIELDNAMES)
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
 
     stored_listing = build_listing(date="2024-05-01 12:00")
-    sqlite_store.upsert_many(conn, [stored_listing], DB_FIELDNAMES)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
 
     followup_listing = build_listing(date="2024-05-03 13:00")
 
@@ -135,33 +134,20 @@ def test_classify_listing_status_flags_large_date_changes():
     }
 
 
-def test_classify_listing_status_ignores_city_changes():
+def test_classify_listing_status_detects_city_changes():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, DB_FIELDNAMES)
+    sqlite_store.init_schema(conn, CSV_FIELDNAMES)
 
     stored_listing = build_listing(city="Skopje")
-    sqlite_store.upsert_many(conn, [stored_listing], DB_FIELDNAMES)
+    sqlite_store.upsert_many(conn, [stored_listing], CSV_FIELDNAMES)
 
     followup_listing = build_listing(city="Bitola")
 
     classify_listing_status([followup_listing], conn)
 
-    assert followup_listing["_status"] == STATUS_UNCHANGED
-    assert followup_listing["_status_changes"] == {}
-
-
-def test_classify_listing_status_ignores_year_kw_and_ps_changes():
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    sqlite_store.init_schema(conn, DB_FIELDNAMES)
-
-    stored_listing = build_listing(year=2019, kw=85, ps=115)
-    sqlite_store.upsert_many(conn, [stored_listing], DB_FIELDNAMES)
-
-    followup_listing = build_listing(year=2020, kw=90, ps=130)
-
-    classify_listing_status([followup_listing], conn)
-
-    assert followup_listing["_status"] == STATUS_UNCHANGED
-    assert followup_listing["_status_changes"] == {}
+    assert followup_listing["_status"] != STATUS_UNCHANGED
+    assert followup_listing["_status_changes"].get("city") == {
+        "old": "Skopje",
+        "new": "Bitola",
+    }

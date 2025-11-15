@@ -12,7 +12,7 @@ from storage import sqlite_store
 def test_aggregate_data_from_db_respects_filters(tmp_path):
     db_path = tmp_path / "cars.db"
     conn = sqlite_store.open_database(str(db_path))
-    sqlite_store.init_schema(conn, scraper.DB_FIELDNAMES)
+    sqlite_store.init_schema(conn, scraper.CSV_FIELDNAMES)
     sqlite_store.upsert_many(
         conn,
         [
@@ -41,7 +41,7 @@ def test_aggregate_data_from_db_respects_filters(tmp_path):
                 "promoted": 0,
             },
         ],
-        scraper.DB_FIELDNAMES,
+        scraper.CSV_FIELDNAMES,
     )
     agg_path = tmp_path / "agg.json"
 
