@@ -173,6 +173,7 @@ def load_user_settings():
         rate_limit = None
     if rate_limit is not None and rate_limit <= 0:
         rate_limit = None
+    db_enabled = bool(raw.get("db_path"))
     settings = UserSettings(
         base_url_template=base_url,
         search_term=raw.get("search_term", ""),
@@ -183,7 +184,7 @@ def load_user_settings():
         detail_worker_count=worker_count,
         detail_rate_limit_permits=rate_limit,
         csv_filename=raw.get("csv_filename", OUTPUT_CSV),
-        db_path=raw.get("db_path") or None,
+        db_path=sqlite_store.DEFAULT_DB_PATH if db_enabled else None,
         skip_unchanged=bool(raw.get("skip_unchanged", False)),
     )
     return settings
@@ -258,39 +259,6 @@ def shorten_url(url, max_length=48):
     return url[: max_length - 3] + "..."
 
 
-def prompt_db_path(default_path=sqlite_store.DEFAULT_DB_PATH):
-    prompt = (
-        "SQLite-Datenbank zum Speichern verwenden "
-        f"(Enter = {default_path}, q = Abbruch): "
-    )
-    user_input = input(prompt).strip()
-    if not user_input:
-        return default_path
-    if user_input.lower() in {"q", "quit"}:
-        return None
-    return user_input
-
-
-def prompt_existing_db_path(default_path=sqlite_store.DEFAULT_DB_PATH):
-    while True:
-        prompt = (
-            "SQLite-Datenbank für Analysen wählen "
-            f"(Enter = {default_path}, q = Abbruch): "
-        )
-        user_input = input(prompt).strip()
-        if not user_input:
-            candidate = default_path
-        elif user_input.lower() in {"q", "quit"}:
-            return None
-        else:
-            candidate = user_input
-        if candidate and os.path.isfile(candidate):
-            return candidate
-        print(
-            f"⚠️  Datei „{candidate}“ wurde nicht gefunden. Bitte erneut versuchen."
-        )
-
-
 def _format_delay_label(value):
     if value is None:
         return "aus"
@@ -338,7 +306,7 @@ def settings_menu():
         print("  [7] ⏳ Detail-Pause konfigurieren")
         print("  [8] 🚦 Detail-Rate-Limit setzen")
         print("  [9] 💾 CSV-Datei ändern")
-        print("  [10] 🗄️  SQLite-Datei festlegen/entfernen")
+        print("  [10] 🗄️  SQLite-Speicherung an/aus")
         print("  [11] ♻️  Umgang mit unveränderten Einträgen")
         print()
         print("  [0] ↩️  Zurück zum Hauptmenü")
@@ -471,14 +439,14 @@ def settings_menu():
             if new_csv:
                 _update_settings(csv_filename=new_csv)
         elif choice == "10":
-            current_db = settings.db_path or "aus"
-            new_db = input(
-                f"SQLite-Datei (Enter = {current_db}, 'leer' = CSV nutzen): "
-            ).strip()
-            if new_db.lower() in {"leer", "csv", "0"}:
+            current_label = "aktiv" if settings.db_path else "aus"
+            toggle = input(
+                f"SQLite-Speicherung aktivieren? (Enter = {current_label}, j/n): "
+            ).strip().lower()
+            if toggle in {"j", "ja", "y", "yes", "1"}:
+                _update_settings(db_path=sqlite_store.DEFAULT_DB_PATH)
+            elif toggle in {"n", "nein", "0"}:
                 _update_settings(db_path=None)
-            elif new_db:
-                _update_settings(db_path=new_db)
         elif choice == "11":
             current_mode = "überspringen" if settings.skip_unchanged else "markieren"
             prompt = (
@@ -1445,7 +1413,8 @@ def run_scraper_flow_from_config(config, *, interactive=True):
     if config.base_url_template:
         BASE_URL_TEMPLATE = config.base_url_template
 
-    db_path = (config.db_path or "").strip() or None
+    db_enabled = bool((config.db_path or "").strip())
+    db_path = sqlite_store.DEFAULT_DB_PATH if db_enabled else None
     db_connection = None
     csv_filename = None
     if db_path:
@@ -1796,7 +1765,7 @@ def _prompt_temporary_overrides(settings):
         print("  [p] ⏳ Detail-Pause")
         print("  [r] 🚦 Detail-Rate-Limit")
         print("  [c] 💾 CSV-Datei")
-        print("  [x] 🗄️  SQLite-Datei")
+        print("  [x] 🗄️  SQLite-Speicherung")
         print("  [u] ♻️  Umgang mit unveränderten Einträgen")
         print()
         choice = input("Feld wählen ([Enter] fertig, q = Abbrechen): ").strip().lower()
@@ -1873,8 +1842,13 @@ def _prompt_temporary_overrides(settings):
             if filename:
                 overrides["csv_filename"] = filename
         elif choice == "x":
-            db_path = input("SQLite-Datei (leer = deaktivieren): ").strip()
-            overrides["db_path"] = db_path or None
+            toggle = input(
+                "SQLite-Speicherung aktivieren? (j/n, Enter = unverändert): "
+            ).strip().lower()
+            if toggle in {"j", "ja", "y", "yes", "1"}:
+                overrides["db_path"] = sqlite_store.DEFAULT_DB_PATH
+            elif toggle in {"n", "nein", "0"}:
+                overrides["db_path"] = None
         elif choice == "u":
             current_label = "überspringen" if working_settings.skip_unchanged else "markieren"
             new_mode = input(
@@ -1993,9 +1967,9 @@ def build_cli_parser():
         help="Zieldatei für die exportierten Rohdaten",
     )
     parser.add_argument(
-        "--db",
-        dest="db_path",
-        help="SQLite-Datenbankdatei statt CSV verwenden",
+        "--use-sqlite",
+        action="store_true",
+        help="Speichert Ergebnisse in der Standard-SQLite-Datenbank",
     )
     parser.add_argument(
         "--base-url",
@@ -2011,9 +1985,9 @@ def build_cli_parser():
 
 
 def run_cli_from_args(args):
-    db_path = (args.db_path or "").strip() or None
+    db_path = sqlite_store.DEFAULT_DB_PATH if args.use_sqlite else None
     if db_path and args.csv_filename:
-        print("ℹ️  --db angegeben – CSV-Export wird bevorzugt und CSV ignoriert.")
+        print("ℹ️  --use-sqlite angegeben – CSV-Export wird deaktiviert.")
     csv_filename = None if db_path else (args.csv_filename or OUTPUT_CSV)
 
     detail_delay_range = None
