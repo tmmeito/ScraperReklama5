@@ -33,8 +33,10 @@ except Exception:
 
 DEFAULT_BASE_URL_TEMPLATE = "https://www.reklama5.mk/Search?city=&cat=24&q={search_term}&page={page_num}"
 BASE_URL_TEMPLATE = DEFAULT_BASE_URL_TEMPLATE
-OUTPUT_CSV        = "reklama5_autos_raw.csv"
-OUTPUT_AGG        = "reklama5_autos_agg.json"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+OUTPUT_CSV        = os.path.join(SCRIPT_DIR, "reklama5_autos_raw.csv")
+OUTPUT_AGG        = os.path.join(SCRIPT_DIR, "reklama5_autos_agg.json")
 
 CSV_FIELDNAMES = [
     "id", "link", "make", "model", "year", "price", "km", "kw", "ps",
@@ -105,7 +107,7 @@ MK_MONTHS = {
 
 DETAIL_DELAY_UNSET = object()
 
-SETTINGS_DIR = os.path.join("data")
+SETTINGS_DIR = DATA_DIR
 USER_SETTINGS_FILE = os.path.join(SETTINGS_DIR, "user_settings.json")
 
 

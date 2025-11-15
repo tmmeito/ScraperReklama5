@@ -9,7 +9,10 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Iterable, Mapping, Optional, Sequence
 
-DEFAULT_DB_PATH = os.path.join("data", "reklama5.db")
+MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(MODULE_DIR), "data", "reklama5.db")
+)
 
 
 def open_database(db_path: str) -> sqlite3.Connection:
