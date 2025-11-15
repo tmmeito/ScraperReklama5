@@ -36,6 +36,21 @@ BASE_URL_TEMPLATE = DEFAULT_BASE_URL_TEMPLATE
 OUTPUT_CSV        = "reklama5_autos_raw.csv"
 OUTPUT_AGG        = "reklama5_autos_agg.json"
 
+DEFAULT_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "mk,en-US;q=0.9,en;q=0.8,de;q=0.7",
+    "Accept-Encoding": "gzip, deflate",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Referer": "https://www.reklama5.mk/",
+    "Connection": "keep-alive",
+}
+
 CSV_FIELDNAMES = [
     "id", "link", "make", "model", "year", "price", "km", "kw", "ps",
     "fuel", "gearbox", "body", "color", "registration", "reg_until",
@@ -605,11 +620,14 @@ def build_base_url_template(raw_input):
     new_query = _rebuild_query_string(query_pairs)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
+def _build_request(url):
+    return urllib_request.Request(url, headers=DEFAULT_HTTP_HEADERS)
+
+
 def fetch_listing_page(search_term, page_num, retries=3, backoff_seconds=2):
     encoded_term = quote_plus(search_term or "")
     url = BASE_URL_TEMPLATE.format(search_term=encoded_term, page_num=page_num)
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; reklama5-scraper/1.0)"}
-    req = urllib_request.Request(url, headers=headers)
+    req = _build_request(url)
 
     for attempt in range(1, retries + 1):
         try:
@@ -993,8 +1011,7 @@ def fetch_detail_attributes(url, retries=3, backoff_seconds=2):
     if not url:
         return {}
 
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; reklama5-scraper/1.0)"}
-    req = urllib_request.Request(url, headers=headers)
+    req = _build_request(url)
 
     for attempt in range(1, retries + 1):
         try:
